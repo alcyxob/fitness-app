@@ -1,0 +1,83 @@
+version: '3.8' # Use a recent stable version
+
+services:
+  # --- Go Application Service ---
+  app:
+    build:
+      context: . # Use the current directory as the build context
+      dockerfile: Dockerfile # Specify the Dockerfile name
+    image: fitness-app-local # Name the image built by compose
+    container_name: fitness-app-service
+    ports:
+      - "8080:8080" # Map host port 8080 to container port 8080
+    environment:
+      # Override config.yaml settings using environment variables
+      # Viper will automatically pick these up
+      SERVER_ADDRESS: ":8080"
+      # --- Database Config ---
+      # Use the service name 'mongodb' as the host within the Docker network
+      DATABASE_URI: "mongodb://mongodb:27017/?retryWrites=true&w=majority"
+      DATABASE_NAME: "fitness_app_dev"
+      # --- S3/MinIO Config ---
+      # Use the service name 'minio' as the host
+      # Use http because local MinIO doesn't have SSL configured by default
+      S3_ENDPOINT: "http://minio:9000"
+      S3_REGION: "us-east-1" # MinIO often requires a region setting
+      S3_ACCESS_KEY_ID: "minioadmin" # Default MinIO root user/access key
+      S3_SECRET_ACCESS_KEY: "minioadmin" # Default MinIO root password/secret key
+      S3_BUCKET_NAME: "fitness-uploads-local" # Name for the local bucket
+      S3_USE_SSL: "false" # Use http for local MinIO endpoint
+      # --- JWT Config ---
+      JWT_SECRET: "a_secure_secret_for_local_development_only_change_me" # Use a simple local secret
+      JWT_EXPIRATION_MINUTES: "60"
+    depends_on:
+      - mongodb # Wait for mongodb to be available (doesn't guarantee it's fully ready)
+      - minio   # Wait for minio to be available
+    networks:
+      - fitness-net # Connect to the custom network
+
+  # --- MongoDB Service ---
+  mongodb:
+    image: mongo:latest # Use the official MongoDB image
+    container_name: fitness-mongo
+    ports:
+      - "27017:27017" # Map host port 27017 to container port 27017 (optional, for external tools)
+    volumes:
+      - mongo-data:/data/db # Persist MongoDB data using a named volume
+    networks:
+      - fitness-net
+
+  # --- MinIO Service (S3 Compatible Storage) ---
+  minio:
+    image: minio/minio:latest # Use the official MinIO image
+    container_name: fitness-minio
+    ports:
+      - "9000:9000" # S3 API port
+      - "9001:9001" # MinIO Console Web UI port
+    volumes:
+      - minio-data:/data # Persist MinIO data using a named volume
+    environment:
+      MINIO_ROOT_USER: "minioadmin" # Access key for MinIO
+      MINIO_ROOT_PASSWORD: "minioadmin" # Secret key for MinIO
+      # MINIO_DOMAIN: "minio" # Optional: If you need domain-style access
+    command: server /data --console-address ":9001" # Start MinIO server & specify console port
+    networks:
+      - fitness-net
+    # Optional: Add a healthcheck to wait until MinIO is actually ready
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+    #   interval: 5s
+    #   timeout: 2s
+    #   retries: 5
+
+# --- Named Volumes Definition ---
+# These volumes persist data even if containers are removed and recreated
+volumes:
+  mongo-data:
+  minio-data:
+
+# --- Custom Network Definition ---
+# Allows services to communicate using their service names (e.g., 'mongodb', 'minio')
+networks:
+  fitness-net:
+    driver: bridge # Default Docker network driver

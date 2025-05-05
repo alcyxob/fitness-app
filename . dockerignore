@@ -1,0 +1,25 @@
+# Git files
+.git/
+.gitignore
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Go modules cache (downloaded inside the container)
+vendor/
+
+# Local configuration (use environment variables or mount volumes for production)
+# config.yaml  <-- Uncomment this if you plan to ONLY use ENV VARS for secrets in Docker
+                 # Leave commented if you want to copy the dev config.yaml for testing
+
+# Binaries/Executables (we build these inside the container)
+server
+*.exe
+*.test
+*.out
+
+# IDE files / OS files
+.idea/
+.vscode/
+*.DS_Store

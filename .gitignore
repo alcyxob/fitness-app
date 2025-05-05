@@ -1,0 +1,5 @@
+# Configuration files containing secrets
+config.yaml
+
+# Compiled executables (if you build locally)
+/fitness-app # Or whatever your executable name might be

@@ -10,6 +10,10 @@ services:
     container_name: fitness-app-service
     ports:
       - "8080:8080" # Map host port 8080 to container port 8080
+    volumes:
+      # Mount the local config.yaml into the container's /app directory
+      # :ro makes it read-only inside the container
+      - ./config.yaml:/app/config.yaml:ro
     environment:
       # Override config.yaml settings using environment variables
       # Viper will automatically pick these up

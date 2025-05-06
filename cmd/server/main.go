@@ -84,7 +84,7 @@ func main() {
 	// --- Initialize Services ---
 	log.Println("Initializing services...")
 	// Pass JWT config directly
-	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.ExpirationMinutes)
+	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
 	exerciseService := service.NewExerciseService(exerciseRepo)
 	trainerService := service.NewTrainerService(userRepo, assignmentRepo, exerciseRepo)
 	clientService := service.NewClientService(assignmentRepo, uploadRepo, exerciseRepo, fileStorage)

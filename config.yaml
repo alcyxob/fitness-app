@@ -1,0 +1,25 @@
+# Server Configuration
+server:
+  address: ":8080" # Default port for local development
+
+# Database Configuration
+database:
+  uri: "mongodb://localhost:27017" # Example for local MongoDB without auth
+  name: "fitness_app_dev" # Development database name
+
+# S3 Compatible Storage Configuration
+s3:
+  endpoint: "localhost:9000" # Example for local MinIO
+  region: "us-east-1" # Often required, even for local/compatible
+  access_key_id: "YOUR_ACCESS_KEY" # Replace with your actual key or use env var
+  secret_access_key: "YOUR_SECRET_KEY" # Replace with your actual secret or use env var
+  bucket_name: "fitness-uploads"
+  use_ssl: false # Often false for local MinIO, true for cloud providers
+
+# JWT Authentication Configuration
+jwt:
+  secret: "a_very_secret_key_change_me_in_prod" # CHANGE THIS! Use a strong random string
+  # --- THIS IS THE KEY CHANGE ---
+  # Use 'expiration' key (or similar) and a Go duration string format.
+  # Examples: "60m", "1h", "90s", "1h30m"
+  expiration: "60m"

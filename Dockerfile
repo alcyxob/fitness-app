@@ -36,12 +36,9 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 # Copy only the compiled binary from the builder stage
 COPY --from=builder /app/server /app/server
 
-# Copy the configuration file (if not relying solely on ENV vars)
-# Make sure config.yaml is NOT in .dockerignore if you need this line
-COPY config.yaml /app/config.yaml
 
 # Change to non-root user (optional but recommended)
-# USER appuser
+USER appuser
 
 # Expose the port the application listens on (matches config.yaml default)
 EXPOSE 8080

@@ -1,101 +1,125 @@
 package api
 
 import (
-	"alcyxob/fitness-app/internal/service" // Need service interfaces if handlers are methods on structs
+	"alcyxob/fitness-app/internal/domain" // Needed for RoleMiddleware
+	"alcyxob/fitness-app/internal/service"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	// Import other handlers as needed
-	// swaggerFiles "github.com/swaggo/files" // swagger handler
-	// ginSwagger "github.com/swaggo/gin-swagger" // gin-swagger middleware
+	// swaggerFiles "github.com/swaggo/files"
+	// ginSwagger "github.com/swaggo/gin-swagger"
 )
 
-// SetupRoutes configures the Gin router with all application routes.
 func SetupRoutes(
 	router *gin.Engine,
-	authService service.AuthService, // Pass in all required services
+	jwtSecret string,
+	authService service.AuthService,
 	trainerService service.TrainerService,
 	clientService service.ClientService,
-	exerciseService service.ExerciseService,
-	// Add storage service if handlers need it directly
+	exerciseService service.ExerciseService, // Make sure this is passed in
 ) {
 
-	// Create handler instances, injecting services
 	authHandler := NewAuthHandler(authService)
-	// exerciseHandler := NewExerciseHandler(exerciseService) // Create later
-	// trainerHandler := NewTrainerHandler(trainerService, exerciseService) // Create later
-	// clientHandler := NewClientHandler(clientService, exerciseService) // Create later
+	// ---> Create ExerciseHandler instance <---
+	exerciseHandler := NewExerciseHandler(exerciseService)
+	trainerHandler := NewTrainerHandler(trainerService)
+	// clientHandler := NewClientHandler(clientService, exerciseService)
 
-	// --- Middleware ---
-	// Logger and Recovery middleware are added by gin.Default()
-	// Add CORS middleware if needed: router.Use(cors.Default())
-	authMiddleware := AuthMiddleware( /* Get JWT secret from config/service */ authService.GetJWTSecret()) // Get secret via public method
+	authMiddleware := AuthMiddleware(jwtSecret) // Using the jwtSecret parameter
 
-	// Basic ping/health check route
 	router.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "pong"})
 	})
 
-	// --- Swagger --- (Optional, requires swaggo setup)
 	// router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// --- Public Routes ---
-	apiV1 := router.Group("/api/v1") // Group routes under /api/v1
+	apiV1 := router.Group("/api/v1")
 	{
-		// Auth routes
 		authGroup := apiV1.Group("/auth")
 		{
 			authGroup.POST("/register", authHandler.Register)
 			authGroup.POST("/login", authHandler.Login)
 		}
-	} // End /api/v1 group
+	}
 
-	// --- Protected Routes (require valid JWT) ---
-	protected := apiV1.Group("")  // Continue using /api/v1 base
-	protected.Use(authMiddleware) // Apply JWT authentication to all routes in this group
+	protected := apiV1.Group("")
+	protected.Use(authMiddleware)
 	{
-		// Example: Route to get current user details (requires auth)
 		protected.GET("/me", func(c *gin.Context) {
 			userIDStr, err := getUserIDFromContext(c)
 			if err != nil {
 				abortWithError(c, http.StatusInternalServerError, "Failed to get user ID from token")
 				return
 			}
-			// In a real app, fetch user details from DB using userIDStr
-			// For now, just return ID and role from context
 			role, _ := getUserRoleFromContext(c)
 			c.JSON(http.StatusOK, gin.H{"userId": userIDStr, "role": role})
 		})
 
-		// TODO: Add routes for Exercises (requires auth)
-		// exerciseGroup := protected.Group("/exercises")
-		// exerciseGroup.POST("", RoleMiddleware(domain.RoleTrainer), exerciseHandler.CreateExercise) // Only Trainers
-		// exerciseGroup.GET("", exerciseHandler.GetAllExercises) // Maybe allow clients too? Or filter by trainer?
-		// exerciseGroup.GET("/:id", exerciseHandler.GetExerciseByID)
-		// exerciseGroup.PUT("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.UpdateExercise) // Only Trainers
-		// exerciseGroup.DELETE("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.DeleteExercise) // Only Trainers
+		// --- Exercise Routes ---
+		exerciseGroup := protected.Group("/exercises")
+		{
+			// POST /api/v1/exercises - Only Trainers can create
+			exerciseGroup.POST("", RoleMiddleware(domain.RoleTrainer), exerciseHandler.CreateExercise)
 
-		// TODO: Add routes for Trainers (require auth + trainer role)
-		// trainerGroup := protected.Group("/trainer")
-		// trainerGroup.Use(RoleMiddleware(domain.RoleTrainer)) // Apply Trainer role check to this group
-		// {
-		// 	trainerGroup.POST("/clients", trainerHandler.AddClient) // Add client by email
-		//  trainerGroup.GET("/clients", trainerHandler.GetMyClients)
-		// 	trainerGroup.POST("/assignments", trainerHandler.AssignExercise)
-		//  trainerGroup.GET("/assignments", trainerHandler.GetMyAssignments)
-		//  trainerGroup.POST("/assignments/:id/feedback", trainerHandler.SubmitFeedback)
-		// }
+			// GET /api/v1/exercises - This endpoint for trainers to get their own exercises
+			// The handler GetTrainerExercises uses the JWT to identify the trainer.
+			// If clients also need to see exercises (e.g., a general library or ones assigned),
+			// you might need a different handler or logic within GetTrainerExercises to differentiate.
+			// For now, let's assume this GET is primarily for trainers.
+			// If clients need access, they'd likely use it via their assignments.
+			exerciseGroup.GET("", RoleMiddleware(domain.RoleTrainer), exerciseHandler.GetTrainerExercises)
 
-		// TODO: Add routes for Clients (require auth + client role)
-		// clientGroup := protected.Group("/client")
-		// clientGroup.Use(RoleMiddleware(domain.RoleClient)) // Apply Client role check to this group
-		// {
-		//  clientGroup.GET("/assignments", clientHandler.GetMyAssignments)
-		//  clientGroup.POST("/assignments/:id/upload-url", clientHandler.RequestUploadURL)
-		//  clientGroup.POST("/assignments/:id/upload-confirm", clientHandler.ConfirmUpload)
-		//  clientGroup.GET("/assignments/:id/video-url", clientHandler.GetMyVideoDownloadURL) // Get download URL for own video
-		// }
+			// TODO: Add routes for specific exercise actions
+			// exerciseGroup.GET("/:id", exerciseHandler.GetExerciseByID)
+			// exerciseGroup.PUT("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.UpdateExercise)
+			// exerciseGroup.DELETE("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.DeleteExercise)
+		}
+
+		// --- Trainer Specific Routes ---
+		// All routes in this group require authentication (from 'protected')
+		// AND the user to have the 'trainer' role.
+		trainerApiGroup := protected.Group("/trainer")
+		trainerApiGroup.Use(RoleMiddleware(domain.RoleTrainer)) // Ensure only trainers can access these
+		{
+			// POST /api/v1/trainer/clients
+			trainerApiGroup.POST("/clients", trainerHandler.AddClientByEmail)
+			// GET /api/v1/trainer/clients
+			trainerApiGroup.GET("/clients", trainerHandler.GetManagedClients)
+
+			// --- Training Plan Management ---
+			// POST /api/v1/trainer/clients/{clientId}/plans
+			trainerApiGroup.POST("/clients/:clientId/plans", trainerHandler.CreateTrainingPlan)
+			// GET /api/v1/trainer/clients/{clientId}/plans
+			trainerApiGroup.GET("/clients/:clientId/plans", trainerHandler.GetTrainingPlansForClient)
+
+			// --- Workout Management ---
+			// POST /api/v1/trainer/plans/{planId}/workouts
+			trainerApiGroup.POST("/plans/:planId/workouts", trainerHandler.CreateWorkout)
+			// GET /api/v1/trainer/plans/{planId}/workouts
+			trainerApiGroup.GET("/plans/:planId/workouts", trainerHandler.GetWorkoutsForPlan)
+
+			// --- Assignment Management (New Structure) ---
+			// POST /api/v1/trainer/workouts/{workoutId}/exercises
+			trainerApiGroup.POST("/workouts/:workoutId/exercises", trainerHandler.AssignExerciseToWorkout)
+
+			// GET /api/v1/trainer/workouts/{workoutId}/assignments (To VIEW assignments for a workout)
+			trainerApiGroup.GET("/workouts/:workoutId/assignments", trainerHandler.GetAssignmentsForWorkout)
+
+			// TODO: GET /api/v1/trainer/workouts/{workoutId}/assignments
+			// TODO: GET /api/v1/trainer/assignments/{assignmentId} // For feedback maybe?
+			// TODO: POST /api/v1/trainer/assignments/:assignmentId/feedback (calls trainerHandler.SubmitFeedback)
+		}
+
+		// TODO: Add routes for Clients
+		// ...
 	}
-
-	// Add more route groups as needed...
 }
+
+// Note on cfg.JWT.Secret:
+// The JWT secret for AuthMiddleware is currently hardcoded or needs to be passed.
+// You'll likely pass the config.JWTConfig (or just the secret string) into SetupRoutes.
+// For example, modify SetupRoutes signature:
+// func SetupRoutes(router *gin.Engine, jwtSecret string, authService service.AuthService, ...)
+// And then in main.go: api.SetupRoutes(router, cfg.JWT.Secret, authService, ...)
+// Then use that jwtSecret parameter for AuthMiddleware:
+// authMiddleware := AuthMiddleware(jwtSecret)

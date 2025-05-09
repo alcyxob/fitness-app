@@ -47,15 +47,9 @@ type ExerciseRepository interface {
 type AssignmentRepository interface {
 	Create(ctx context.Context, assignment *domain.Assignment) (primitive.ObjectID, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Assignment, error)
-	GetByClientID(ctx context.Context, clientID primitive.ObjectID) ([]domain.Assignment, error)
-	GetByTrainerID(ctx context.Context, trainerID primitive.ObjectID) ([]domain.Assignment, error)
-	// Maybe GetByExerciseID ?
-	Update(ctx context.Context, assignment *domain.Assignment) error // General update
-	// Or more specific updates:
-	// UpdateStatus(ctx context.Context, id primitive.ObjectID, status domain.AssignmentStatus) error
-	// AddUploadID(ctx context.Context, id primitive.ObjectID, uploadID primitive.ObjectID) error
-	// AddFeedback(ctx context.Context, id primitive.ObjectID, feedback string) error
-	// Delete(ctx context.Context, id primitive.ObjectID) error // Should assignments be deletable? Or just archived?
+	GetByWorkoutID(ctx context.Context, workoutID primitive.ObjectID) ([]domain.Assignment, error) // <<< ADD/VERIFY THIS
+	// ... (other methods like GetByClientID, GetByTrainerID might be obsolete or need rework)
+	Update(ctx context.Context, assignment *domain.Assignment) error
 }
 
 // UploadRepository defines the interface for interacting with upload metadata.
@@ -64,4 +58,20 @@ type UploadRepository interface {
 	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Upload, error)
 	GetByAssignmentID(ctx context.Context, assignmentID primitive.ObjectID) (*domain.Upload, error) // Assuming one upload per assignment? Adjust if multiple allowed.
 	// Delete(ctx context.Context, id primitive.ObjectID) error // Usually delete metadata when S3 object is deleted
+}
+
+// TrainingPlanRepository defines the interface for interacting with training plan data.
+type TrainingPlanRepository interface {
+	Create(ctx context.Context, plan *domain.TrainingPlan) (primitive.ObjectID, error)
+	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.TrainingPlan, error)
+	GetByClientAndTrainerID(ctx context.Context, clientID, trainerID primitive.ObjectID) ([]domain.TrainingPlan, error)
+	// TODO: Add Update, Delete, maybe GetActivePlanForClient methods later if needed
+}
+
+// WorkoutRepository defines the interface for interacting with workout data.
+type WorkoutRepository interface {
+	Create(ctx context.Context, workout *domain.Workout) (primitive.ObjectID, error)
+	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Workout, error)
+	GetByPlanID(ctx context.Context, planID primitive.ObjectID) ([]domain.Workout, error) // Get all workouts for a plan
+	// TODO: Add Update, Delete methods later if needed
 }

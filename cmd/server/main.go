@@ -1,13 +1,13 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"alcyxob/fitness-app/internal/api" // Import API package
 	"alcyxob/fitness-app/internal/config"
 	"alcyxob/fitness-app/internal/repository/mongo"
 	"alcyxob/fitness-app/internal/service"
 	"alcyxob/fitness-app/internal/storage"
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -64,6 +64,8 @@ func main() {
 		mongo.EnsureExerciseIndexes(ctx, appDB.Collection("exercises"))
 		mongo.EnsureAssignmentIndexes(ctx, appDB.Collection("assignments"))
 		mongo.EnsureUploadIndexes(ctx, appDB.Collection("uploads"))
+		mongo.EnsureTrainingPlanIndexes(ctx, appDB.Collection("training_plans"))
+		mongo.EnsureWorkoutIndexes(ctx, appDB.Collection("workouts"))
 		log.Println("Index creation process completed.")
 	}()
 
@@ -80,14 +82,17 @@ func main() {
 	exerciseRepo := mongo.NewMongoExerciseRepository(appDB)
 	assignmentRepo := mongo.NewMongoAssignmentRepository(appDB)
 	uploadRepo := mongo.NewMongoUploadRepository(appDB)
+	trainingPlanRepo := mongo.NewMongoTrainingPlanRepository(appDB) // ADDED
+	workoutRepo := mongo.NewMongoWorkoutRepository(appDB)
+  // workoutRepo := mongo.NewMongoWorkoutRepository(appDB) // Add later
 
 	// --- Initialize Services ---
 	log.Println("Initializing services...")
 	// Pass JWT config directly
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
 	exerciseService := service.NewExerciseService(exerciseRepo)
-	trainerService := service.NewTrainerService(userRepo, assignmentRepo, exerciseRepo)
-	clientService := service.NewClientService(assignmentRepo, uploadRepo, exerciseRepo, fileStorage)
+	trainerService := service.NewTrainerService(userRepo, assignmentRepo, exerciseRepo, trainingPlanRepo, workoutRepo)
+	clientService := service.NewClientService(assignmentRepo, uploadRepo, exerciseRepo, workoutRepo, fileStorage)
 
 	// --- Initialize Gin Engine ---
 	// gin.SetMode(gin.ReleaseMode) // Uncomment for production
@@ -96,7 +101,7 @@ func main() {
 	// --- Setup Routes ---
 	log.Println("Setting up API routes...")
 	// Pass services to the route setup function
-	api.SetupRoutes(router, authService, trainerService, clientService, exerciseService)
+	api.SetupRoutes(router, cfg.JWT.Secret, authService, trainerService, clientService, exerciseService)
 
 	// --- Start HTTP Server ---
 	server := &http.Server{

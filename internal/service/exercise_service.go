@@ -1,10 +1,10 @@
 package service
 
 import (
-	"context"
-	"errors"
 	"alcyxob/fitness-app/internal/domain"
 	"alcyxob/fitness-app/internal/repository" // Import repository package
+	"context"
+	"errors"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -18,10 +18,10 @@ var (
 
 // --- Service Interface (Optional) ---
 type ExerciseService interface {
-	CreateExercise(ctx context.Context, trainerID primitive.ObjectID, name, description, instructions, videoURL string) (*domain.Exercise, error)
+	CreateExercise(ctx context.Context, trainerID primitive.ObjectID, name, description, muscleGroup, executionTechnic, applicability, difficulty, videoURL string) (*domain.Exercise, error)
 	GetExerciseByID(ctx context.Context, exerciseID primitive.ObjectID) (*domain.Exercise, error)
 	GetExercisesByTrainer(ctx context.Context, trainerID primitive.ObjectID) ([]domain.Exercise, error)
-	UpdateExercise(ctx context.Context, trainerID, exerciseID primitive.ObjectID, name, description, instructions, videoURL string) (*domain.Exercise, error)
+	UpdateExercise(ctx context.Context, trainerID, exerciseID primitive.ObjectID, name, description, muscleGroup, executionTechnic, applicability, difficulty, videoURL string) (*domain.Exercise, error)
 	DeleteExercise(ctx context.Context, trainerID, exerciseID primitive.ObjectID) error
 }
 
@@ -30,8 +30,8 @@ type ExerciseService interface {
 // exerciseService implements the ExerciseService interface.
 type exerciseService struct {
 	exerciseRepo repository.ExerciseRepository
-	// userRepo repository.UserRepository // Might be needed later for more complex validation/auth checks
 }
+
 
 // NewExerciseService creates a new instance of exerciseService.
 func NewExerciseService(exerciseRepo repository.ExerciseRepository) ExerciseService {
@@ -40,39 +40,35 @@ func NewExerciseService(exerciseRepo repository.ExerciseRepository) ExerciseServ
 	}
 }
 
+
 // CreateExercise handles the creation of a new exercise by a trainer.
-func (s *exerciseService) CreateExercise(ctx context.Context, trainerID primitive.ObjectID, name, description, instructions, videoURL string) (*domain.Exercise, error) {
-	// 1. Validation
+func (s *exerciseService) CreateExercise(ctx context.Context, trainerID primitive.ObjectID, name, description, muscleGroup, executionTechnic, applicability, difficulty, videoURL string) (*domain.Exercise, error) {
 	if name == "" {
 		return nil, ErrValidationFailed // Example: Name is required
 	}
 	if trainerID == primitive.NilObjectID {
 		return nil, errors.New("trainer ID is required to create an exercise")
 	}
-	// Add more validation as needed (e.g., length limits, URL format)
+	// Add more specific validation for new fields if needed (e.g., difficulty is one of "Novice", "Medium", "Advanced")
 
-	// 2. Create domain object
 	exercise := &domain.Exercise{
 		TrainerID:    trainerID,
 		Name:         name,
 		Description:  description,
-		Instructions: instructions,
-		VideoURL:     videoURL,
-		// ID, CreatedAt, UpdatedAt set by repository
+		MuscleGroup:  muscleGroup,
+		ExecutionTechnic: executionTechnic,
+		Applicability: applicability,
+		Difficulty:   difficulty,
+		VideoURL:     videoURL, // Optional, can be empty
 	}
 
-	// 3. Call repository to save
 	exerciseID, err := s.exerciseRepo.Create(ctx, exercise)
 	if err != nil {
-		// Log internal errors if needed
-		return nil, err // Propagate repository errors
+		return nil, err
 	}
-	exercise.ID = exerciseID // Set the generated ID
-
-	// Optionally fetch the full object if Create doesn't return it fully populated
-	// return s.GetExerciseByID(ctx, exerciseID) // If timestamps etc., are needed immediately
-
-	return exercise, nil
+	exercise.ID = exerciseID
+	// To get CreatedAt/UpdatedAt populated by the DB back into the returned object:
+	return s.exerciseRepo.GetByID(ctx, exerciseID) // Fetch again to get all fields
 }
 
 // GetExerciseByID retrieves a single exercise.
@@ -105,8 +101,7 @@ func (s *exerciseService) GetExercisesByTrainer(ctx context.Context, trainerID p
 }
 
 // UpdateExercise handles updating an existing exercise, ensuring ownership.
-func (s *exerciseService) UpdateExercise(ctx context.Context, trainerID, exerciseID primitive.ObjectID, name, description, instructions, videoURL string) (*domain.Exercise, error) {
-	// 1. Validation
+func (s *exerciseService) UpdateExercise(ctx context.Context, trainerID, exerciseID primitive.ObjectID, name, description, muscleGroup, executionTechnic, applicability, difficulty, videoURL string) (*domain.Exercise, error) {
 	if name == "" {
 		return nil, ErrValidationFailed
 	}
@@ -114,37 +109,34 @@ func (s *exerciseService) UpdateExercise(ctx context.Context, trainerID, exercis
 		return nil, errors.New("trainer ID and exercise ID are required")
 	}
 
-	// 2. Fetch existing exercise to check ownership
 	existingExercise, err := s.exerciseRepo.GetByID(ctx, exerciseID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrExerciseNotFound
 		}
-		return nil, err // Propagate other errors
+		return nil, err
 	}
 
-	// 3. Authorization Check: Ensure the trainer owns this exercise
 	if existingExercise.TrainerID != trainerID {
 		return nil, ErrExerciseAccessDenied
 	}
 
-	// 4. Update fields on the fetched object
+	// Update fields
 	existingExercise.Name = name
 	existingExercise.Description = description
-	existingExercise.Instructions = instructions
-	existingExercise.VideoURL = videoURL
-	// UpdatedAt will be set by the repository Update method
+	existingExercise.MuscleGroup = muscleGroup
+	existingExercise.ExecutionTechnic = executionTechnic
+	existingExercise.Applicability = applicability
+	existingExercise.Difficulty = difficulty
+	existingExercise.VideoURL = videoURL // Allow updating the video URL
 
-	// 5. Call repository to save changes
 	err = s.exerciseRepo.Update(ctx, existingExercise)
 	if err != nil {
-		// Handle potential repository errors (like ErrNotFound if somehow deleted between Get and Update)
-		if errors.Is(err, repository.ErrNotFound) { // Should ideally not happen due to prior check, but good practice
+		if errors.Is(err, repository.ErrNotFound) {
 			return nil, ErrExerciseNotFound
 		}
 		return nil, err
 	}
-
 	return existingExercise, nil
 }
 

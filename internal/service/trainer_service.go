@@ -3,6 +3,7 @@ package service
 import (
 	"alcyxob/fitness-app/internal/domain"
 	"alcyxob/fitness-app/internal/repository"
+	"alcyxob/fitness-app/internal/storage"
 	"context"
 	"errors"
 	"time"
@@ -23,6 +24,8 @@ var (
 	ErrWorkoutCreationFailed = errors.New("failed to create workout")
 	ErrWorkoutNotFound      = errors.New("workout not found") // If needed later
 	ErrTrainingPlanAccessDenied = errors.New("access denied to this training plan")
+	ErrUploadNotFoundForAssignment = errors.New("no upload found for this assignment")
+	ErrS3URLGenerationFailed     = errors.New("failed to generate S3 download URL")
 )
 
 // TrainerService Interface
@@ -42,6 +45,8 @@ type TrainerService interface {
 	AssignExerciseToWorkout(ctx context.Context, trainerID, workoutID, exerciseID primitive.ObjectID, assignmentDetails domain.Assignment) (*domain.Assignment, error)
 	GetAssignmentsForWorkout(ctx context.Context, trainerID, workoutID primitive.ObjectID) ([]domain.Assignment, error)
 
+	// --- NEW: Get Video Download URL for an Assignment ---
+	GetAssignmentVideoDownloadURL(ctx context.Context, trainerID, assignmentID primitive.ObjectID) (string, error)
 	// Existing Assignment Management (will be adapted or removed)
 	//GetAssignmentsByTrainer(ctx context.Context, trainerID primitive.ObjectID) ([]domain.Assignment, error)
 	SubmitFeedback(ctx context.Context, trainerID, assignmentID primitive.ObjectID, feedback string, newStatus domain.AssignmentStatus) (*domain.Assignment, error)
@@ -56,6 +61,8 @@ type trainerService struct {
 	exerciseRepo      repository.ExerciseRepository
 	trainingPlanRepo  repository.TrainingPlanRepository
   workoutRepo repository.WorkoutRepository
+	uploadRepo        repository.UploadRepository
+	fileStorage       storage.FileStorage
 }
 
 // NewTrainerService creates a new instance of trainerService.
@@ -65,6 +72,8 @@ func NewTrainerService(
 	exerciseRepo repository.ExerciseRepository,
 	trainingPlanRepo repository.TrainingPlanRepository,
 	workoutRepo repository.WorkoutRepository,
+	uploadRepo repository.UploadRepository,
+	fileStorage storage.FileStorage, 
 	) TrainerService {
 		return &trainerService{
 			userRepo:          userRepo,
@@ -72,6 +81,8 @@ func NewTrainerService(
 			exerciseRepo:      exerciseRepo,
 			trainingPlanRepo:  trainingPlanRepo,
 			workoutRepo:       workoutRepo,
+			uploadRepo:        uploadRepo,
+			fileStorage:       fileStorage,
 		}
 }
 
@@ -434,7 +445,7 @@ func (s *trainerService) AssignExerciseToWorkout(ctx context.Context, trainerID,
 	return fullAssignment, nil
 }
 
-// === NEW GetAssignmentsForWorkout Implementation ===
+// GetAssignmentsForWorkout Implementation ===
 func (s *trainerService) GetAssignmentsForWorkout(ctx context.Context, trainerID, workoutID primitive.ObjectID) ([]domain.Assignment, error) {
 	// 1. Validate Inputs
 	if trainerID == primitive.NilObjectID || workoutID == primitive.NilObjectID {
@@ -460,4 +471,60 @@ func (s *trainerService) GetAssignmentsForWorkout(ctx context.Context, trainerID
 			return nil, errors.New("failed to retrieve assignments for workout")
 	}
 	return assignments, nil
+}
+
+// Get Video Download URL for an Assignment (Trainer) ===
+func (s *trainerService) GetAssignmentVideoDownloadURL(ctx context.Context, trainerID, assignmentID primitive.ObjectID) (string, error) {
+	// 1. Validate Inputs
+	if trainerID == primitive.NilObjectID || assignmentID == primitive.NilObjectID {
+			return "", errors.New("trainer ID and assignment ID are required")
+	}
+
+	// 2. Get the Assignment
+	assignment, err := s.assignmentRepo.GetByID(ctx, assignmentID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					return "", ErrAssignmentNotFound
+			}
+			return "", err
+	}
+
+	// 3. Authorization: Verify trainer owns the workout this assignment belongs to
+	workout, err := s.workoutRepo.GetByID(ctx, assignment.WorkoutID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					// log.Printf("Data inconsistency: Assignment %s's workout %s not found.", assignmentID.Hex(), assignment.WorkoutID.Hex())
+					return "", ErrWorkoutNotFound
+			}
+			return "", err
+	}
+	if workout.TrainerID != trainerID {
+			return "", ErrAssignmentAccessDenied // Trainer doesn't own this assignment's workout
+	}
+
+	// 4. Check if an upload exists for this assignment
+	if assignment.UploadID == nil || *assignment.UploadID == primitive.NilObjectID {
+			return "", ErrUploadNotFoundForAssignment
+	}
+
+	// 5. Get the Upload metadata to find the S3 object key
+	upload, err := s.uploadRepo.GetByID(ctx, *assignment.UploadID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					// Data inconsistency if assignment has UploadID but Upload record doesn't exist
+					// log.Printf("Data inconsistency: Assignment %s has UploadID %s, but Upload record not found.", assignmentID.Hex(), (*assignment.UploadID).Hex())
+					return "", ErrUploadNotFoundForAssignment
+			}
+			return "", err
+	}
+
+	// 6. Generate pre-signed GET URL from S3 for the object key
+	// Use a reasonable expiry, e.g., 5-15 minutes for viewing.
+	downloadURL, err := s.fileStorage.GeneratePresignedDownloadURL(ctx, upload.S3ObjectKey, 15*time.Minute)
+	if err != nil {
+			// log.Printf("Error generating S3 download URL for key %s: %v", upload.S3ObjectKey, err)
+			return "", ErrS3URLGenerationFailed
+	}
+
+	return downloadURL, nil
 }

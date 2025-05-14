@@ -10,6 +10,7 @@ database:
 # S3 Compatible Storage Configuration
 s3:
   endpoint: "localhost:9000" # Example for local MinIO
+  public_endpoint: "http://localhost:9000"
   region: "us-east-1" # Often required, even for local/compatible
   access_key_id: "YOUR_ACCESS_KEY" # Replace with your actual key or use env var
   secret_access_key: "YOUR_SECRET_KEY" # Replace with your actual secret or use env var

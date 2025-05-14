@@ -27,6 +27,7 @@ type DatabaseConfig struct {
 
 type S3Config struct {
 	Endpoint        string `mapstructure:"endpoint"`
+	PublicEndpoint  string `mapstructure:"public_endpoint"`
 	Region          string `mapstructure:"region"`
 	AccessKeyID     string `mapstructure:"access_key_id"`
 	SecretAccessKey string `mapstructure:"secret_access_key"`
@@ -64,6 +65,7 @@ func LoadConfig(path string) (config Config, err error) {
 	viper.SetDefault("database.uri", "mongodb://localhost:27017")
 	viper.SetDefault("database.name", "fitness_app_default")
 	viper.SetDefault("s3.use_ssl", true)     // Default to true for cloud providers
+	viper.SetDefault("s3.public_endpoint", "http://localhost:9000")
 	viper.SetDefault("jwt.expiration", "1h") // Default JWT expiry to 1 hour
 
 	// --- Read Config File ---

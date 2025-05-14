@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path" // For constructing object keys
 	"strings"
+	"time"
 
 	"github.com/google/uuid" // For generating unique identifiers for S3 keys
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -22,6 +23,10 @@ var (
 	ErrUploadURLError              = errors.New("failed to generate upload URL")
 	ErrDownloadURLError            = errors.New("failed to generate download URL")
 	ErrUploadMetadataMissing       = errors.New("upload metadata is missing")
+	ErrClientHasNoActivePlan = errors.New("client does not have an active training plan")
+	ErrPlanNotAssignedToClient = errors.New("this training plan is not assigned to the client")
+	ErrWorkoutNotBelongToPlan = errors.New("this workout does not belong to the specified plan for this client")
+	ErrInvalidAssignmentStatusUpdate = errors.New("invalid status update for assignment")
 )
 
 // --- Service Interface (Optional) ---
@@ -49,48 +54,53 @@ type ClientService interface {
 
 	// Optional: Get download URL for client's own video
 	GetMyVideoDownloadURL(ctx context.Context, clientID, assignmentID primitive.ObjectID) (string, error)
+
+	GetMyActiveTrainingPlans(ctx context.Context, clientID primitive.ObjectID) ([]domain.TrainingPlan, error) // Could also be GetMyTrainingPlans
+	GetWorkoutsForMyPlan(ctx context.Context, clientID, planID primitive.ObjectID) ([]domain.Workout, error)
+	GetAssignmentsForMyWorkout(ctx context.Context, clientID, workoutID primitive.ObjectID) ([]domain.Assignment, error)
+	UpdateMyAssignmentStatus(ctx context.Context, clientID, assignmentID primitive.ObjectID, newStatus domain.AssignmentStatus) (*domain.Assignment, error)
 }
 
 // --- Service Implementation ---
 
 // clientService implements the ClientService interface.
 type clientService struct {
-	assignmentRepo repository.AssignmentRepository
-	uploadRepo     repository.UploadRepository
-	exerciseRepo   repository.ExerciseRepository // Needed to enrich assignment details
-	workoutRepo    repository.WorkoutRepository
-	fileStorage    storage.FileStorage
+	userRepo          repository.UserRepository
+	assignmentRepo    repository.AssignmentRepository
+	uploadRepo        repository.UploadRepository
+	exerciseRepo      repository.ExerciseRepository // Still needed to enrich assignments with exercise details
+	workoutRepo       repository.WorkoutRepository
+	trainingPlanRepo  repository.TrainingPlanRepository 
+	fileStorage       storage.FileStorage
 }
 
 // NewClientService creates a new instance of clientService.
 func NewClientService(
+	userRepo         repository.UserRepository,
 	assignmentRepo repository.AssignmentRepository,
 	uploadRepo repository.UploadRepository,
 	exerciseRepo repository.ExerciseRepository, // Added dependency
 	workoutRepo    repository.WorkoutRepository,
+	trainingPlanRepo repository.TrainingPlanRepository,
 	fileStorage storage.FileStorage,
 ) ClientService {
 	return &clientService{
+		userRepo:         userRepo,
 		assignmentRepo: assignmentRepo,
 		uploadRepo:     uploadRepo,
 		exerciseRepo:   exerciseRepo,
 		workoutRepo:    workoutRepo,
+		trainingPlanRepo:  trainingPlanRepo,
 		fileStorage:    fileStorage,
 	}
 }
 
-// === Assignment Viewing ===
-
-// GetMyAssignments retrieves assignments for the client, enriching them with exercise details.
+// This method is now superseded by the new granular methods.
+// It needs to be updated or removed to avoid confusion.
 func (s *clientService) GetMyAssignments(ctx context.Context, clientID primitive.ObjectID) ([]AssignmentDetails, error) {
-	// TODO: Reimplement this method based on the new TrainingPlan -> Workout -> Assignment structure.
-	// 1. Find active/relevant TrainingPlan(s) for clientID.
-	// 2. Find Workout(s) for those plans.
-	// 3. Find Assignment(s) for those workouts.
-	// 4. Fetch related Exercise details.
-	// 5. Combine into AssignmentDetails.
-	fmt.Printf("WARNING: GetMyAssignments in clientService needs reimplementation for new data structure.\n")
-	return []AssignmentDetails{}, nil // Return empty for now to avoid errors using old logic
+	fmt.Printf("WARNING: GetMyAssignments in clientService is DEPRECATED and needs complete reimplementation based on new TrainingPlan -> Workout -> Assignment structure.\n")
+	// This old implementation is likely broken.
+	return []AssignmentDetails{}, errors.New("GetMyAssignments is deprecated; use GetAssignmentsForMyWorkout")
 }
 
 // === Upload Process ===
@@ -132,7 +142,9 @@ func (s *clientService) RequestUploadURL(ctx context.Context, clientID, assignme
 
 
 	// 3. Check if upload is allowed based on status
-	if assignment.Status != domain.StatusAssigned && assignment.Status != domain.StatusReviewed {
+	if assignment.Status != domain.StatusAssigned && 
+		 assignment.Status != domain.StatusReviewed &&
+		 assignment.Status != domain.StatusCompleted {
 		return nil, ErrUploadNotAllowed
 	}
 
@@ -287,4 +299,151 @@ func (s *clientService) GetMyVideoDownloadURL(ctx context.Context, clientID, ass
 	}
 
 	return downloadURL, nil
+}
+
+// GetMyActiveTrainingPlans fetches active (or all) training plans for the given client.
+func (s *clientService) GetMyActiveTrainingPlans(ctx context.Context, clientID primitive.ObjectID) ([]domain.TrainingPlan, error) {
+	if clientID == primitive.NilObjectID {
+			return nil, errors.New("client ID is required")
+	}
+	// The repository method GetByClientAndTrainerID could be adapted or a new one GetByClientID
+	// For now, let's assume a client can only have plans from ONE trainer at a time.
+	// We'd need to fetch the client to find their trainer if the repo needs trainerId.
+	clientUser, err := s.userRepo.GetByID(ctx, clientID) // Assuming userRepo is added to clientService, or get trainerID differently
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					return nil, ErrClientNotFound
+			}
+			return nil, err
+	}
+	if clientUser.TrainerID == nil || *clientUser.TrainerID == primitive.NilObjectID {
+			return []domain.TrainingPlan{}, nil // No trainer, so no plans from a trainer
+	}
+
+	// Fetch plans assigned by this client's current trainer
+	// The GetByClientAndTrainerID already filters appropriately.
+	plans, err := s.trainingPlanRepo.GetByClientAndTrainerID(ctx, clientID, *clientUser.TrainerID)
+	if err != nil {
+			// log.Printf("Error fetching plans for client %s: %v", clientID.Hex(), err)
+			return nil, errors.New("failed to retrieve training plans")
+	}
+	// Optionally filter for IsActive == true here if the method name implies only active
+	// var activePlans []domain.TrainingPlan
+	// for _, p := range plans {
+	//     if p.IsActive {
+	//         activePlans = append(activePlans, p)
+	//     }
+	// }
+	// return activePlans, nil
+	return plans, nil // Returning all plans for now, client can see active flag
+}
+
+// GetWorkoutsForMyPlan fetches workouts for a specific plan IF that plan belongs to the client.
+func (s *clientService) GetWorkoutsForMyPlan(ctx context.Context, clientID, planID primitive.ObjectID) ([]domain.Workout, error) {
+	if clientID == primitive.NilObjectID || planID == primitive.NilObjectID {
+			return nil, errors.New("client ID and plan ID are required")
+	}
+
+	// 1. Verify the plan exists and is actually assigned to this client
+	plan, err := s.trainingPlanRepo.GetByID(ctx, planID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					return nil, ErrTrainingPlanNotFound
+			}
+			return nil, err
+	}
+	if plan.ClientID != clientID {
+			return nil, ErrPlanNotAssignedToClient // Security check
+	}
+
+	// 2. Fetch workouts for this validated plan
+	workouts, err := s.workoutRepo.GetByPlanID(ctx, planID)
+	if err != nil {
+			// log.Printf("Error fetching workouts for client's plan %s: %v", planID.Hex(), err)
+			return nil, errors.New("failed to retrieve workouts for the plan")
+	}
+	return workouts, nil
+}
+
+// GetAssignmentsForMyWorkout fetches assignments for a workout IF it belongs to client's plan.
+func (s *clientService) GetAssignmentsForMyWorkout(ctx context.Context, clientID, workoutID primitive.ObjectID) ([]domain.Assignment, error) {
+	if clientID == primitive.NilObjectID || workoutID == primitive.NilObjectID {
+			return nil, errors.New("client ID and workout ID are required")
+	}
+
+	// 1. Verify the workout exists and is actually assigned to this client
+	workout, err := s.workoutRepo.GetByID(ctx, workoutID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					return nil, ErrWorkoutNotFound
+			}
+			return nil, err
+	}
+	if workout.ClientID != clientID { // Check via the denormalized ClientID on Workout
+			return nil, ErrWorkoutNotBelongToPlan // Or a more generic auth error
+	}
+
+	// 2. Fetch assignments for this validated workout
+	assignments, err := s.assignmentRepo.GetByWorkoutID(ctx, workoutID)
+	if err != nil {
+			// log.Printf("Error fetching assignments for client's workout %s: %v", workoutID.Hex(), err)
+			return nil, errors.New("failed to retrieve assignments for the workout")
+	}
+	return assignments, nil
+}
+
+func (s *clientService) UpdateMyAssignmentStatus(ctx context.Context, clientID, assignmentID primitive.ObjectID, newStatus domain.AssignmentStatus) (*domain.Assignment, error) {
+	if clientID == primitive.NilObjectID || assignmentID == primitive.NilObjectID {
+			return nil, errors.New("client ID and assignment ID are required")
+	}
+	if newStatus == "" { // Or validate against a list of allowed client-settable statuses
+			return nil, errors.New("new status cannot be empty")
+	}
+	// Example: Client can only set to "completed" or maybe "skipped"
+	if newStatus != domain.StatusCompleted { // && newStatus != domain.StatusSkipped (if you add it)
+			return nil, ErrInvalidAssignmentStatusUpdate // Client tries to set to "reviewed" etc.
+	}
+
+
+	// 1. Get the assignment
+	assignment, err := s.assignmentRepo.GetByID(ctx, assignmentID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					return nil, ErrAssignmentNotFound
+			}
+			return nil, err
+	}
+
+	// 2. Authorization: Verify assignment belongs to client (via workout)
+	workout, err := s.workoutRepo.GetByID(ctx, assignment.WorkoutID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					// log.Printf("Data inconsistency: Assignment %s found, but Workout %s not found", assignmentID.Hex(), assignment.WorkoutID.Hex())
+					return nil, ErrWorkoutNotFound
+			}
+			return nil, errors.New("failed to verify workout for assignment status update")
+	}
+	if workout.ClientID != clientID {
+			return nil, ErrAssignmentNotBelongToClient
+	}
+
+	// 3. Update status and save
+	// Optional: Add logic here to prevent updating status if already "reviewed" by trainer, etc.
+	// if assignment.Status == domain.StatusReviewed { ... return error ... }
+
+	assignment.Status = newStatus
+	assignment.UpdatedAt = time.Now().UTC() // Ensure UpdatedAt is modified
+
+	err = s.assignmentRepo.Update(ctx, assignment) // This update should persist all fields of assignment
+	if err != nil {
+			// log.Printf("Error updating assignment status for %s: %v", assignmentID.Hex(), err)
+			return nil, errors.New("failed to update assignment status")
+	}
+
+	// Return the updated assignment (Update might not return the full object, so GetByID again if needed)
+	// The current s.assignmentRepo.Update doesn't return the updated object.
+	// For simplicity, we return the modified local 'assignment' object.
+	// To be fully robust, fetch it again:
+	// return s.assignmentRepo.GetByID(ctx, assignmentID)
+	return assignment, nil
 }

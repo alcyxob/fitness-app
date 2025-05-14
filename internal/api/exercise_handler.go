@@ -181,6 +181,41 @@ func (h *ExerciseHandler) GetTrainerExercises(c *gin.Context) {
 }
 
 // TODO: Implement other handlers:
-// GetExerciseByID(c *gin.Context)
 // UpdateExercise(c *gin.Context)
 // DeleteExercise(c *gin.Context)
+
+// GetExerciseByID godoc
+// @Summary Get a specific exercise by ID
+// @Description Retrieves details for a single exercise.
+// @Tags Exercises
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Exercise ObjectID Hex"
+// @Success 200 {object} ExerciseResponse
+// @Failure 400 {object} gin.H "Invalid ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 404 {object} gin.H "Exercise not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /exercises/{id} [get]
+func (h *ExerciseHandler) GetExerciseByID(c *gin.Context) {
+	exerciseIDHex := c.Param("id")
+	exerciseID, err := primitive.ObjectIDFromHex(exerciseIDHex)
+	if err != nil {
+		abortWithError(c, http.StatusBadRequest, "Invalid exercise ID format.")
+		return
+	}
+
+	// No explicit trainer ID check here assumes any authenticated user can GET an exercise by ID if they know it,
+	// OR ExerciseService.GetExerciseByID enforces some ownership if needed (e.g. only trainer's own exercises).
+	// For a general library item, this might be okay.
+	exercise, err := h.exerciseService.GetExerciseByID(c.Request.Context(), exerciseID)
+	if err != nil {
+		if errors.Is(err, service.ErrExerciseNotFound) { // Assuming service returns this
+			abortWithError(c, http.StatusNotFound, "Exercise not found.")
+		} else {
+			abortWithError(c, http.StatusInternalServerError, "Failed to retrieve exercise.")
+		}
+		return
+	}
+	c.JSON(http.StatusOK, MapExerciseToResponse(exercise))
+}

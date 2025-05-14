@@ -404,7 +404,7 @@ type CreateWorkoutRequest struct {
 	Name      string `json:"name" binding:"required"`
 	DayOfWeek *int   `json:"dayOfWeek" binding:"omitempty,min=1,max=7"` // Optional day
 	Notes     string `json:"notes"`
-	Sequence  int    `json:"sequence" binding:"required,min=0"` // Require sequence
+	Sequence  *int    `json:"sequence" binding:"required,min=0"` // Require sequence
 }
 
 type WorkoutResponse struct {
@@ -495,6 +495,26 @@ func (h *TrainerHandler) CreateWorkout(c *gin.Context) {
 	}
 
 	// Call service
+	var sequenceVal int
+	if req.Sequence != nil { // Check if the pointer is not nil
+			sequenceVal = *req.Sequence
+	} else {
+			// Handle case where sequence is truly not provided, though "required" should prevent this
+			// For "required" on a pointer, it means the key must be present in JSON, even if value is null.
+			// If JSON sends "sequence": null, req.Sequence will be nil.
+			// If JSON omits "sequence", req.Sequence will be nil.
+			// If "required" means "key must exist and value must not be the zero-value for the pointed-to type (e.g. not 0 for int)"
+			// then sending "sequence": 0 would be fine.
+			// The issue is the default validator's behavior with "required" on non-pointer int.
+			// Let's assume if it passes binding, and req.Sequence is not nil, we use its value.
+			// If binding:"required" on *int means "key must exist and value must be provided (not null)", then this is fine.
+			// If `req.Sequence` could be nil after binding and that's an error, you'd check here.
+			// But given the error, the issue is with `int` and `0`.
+			// If req.Sequence is nil here despite being required, Gin's binding itself has an issue with *int and required.
+			// Let's assume required *int means it will be non-nil if validation passes.
+			sequenceVal = *req.Sequence // If required *int guarantees non-nil, this is safe.
+	}
+
 	workout, err := h.trainerService.CreateWorkout(
 		c.Request.Context(),
 		trainerID,
@@ -502,7 +522,7 @@ func (h *TrainerHandler) CreateWorkout(c *gin.Context) {
 		req.Name,
 		req.DayOfWeek,
 		req.Notes,
-		req.Sequence,
+		sequenceVal,
 	)
 	if err != nil {
 		// Map service errors
@@ -584,14 +604,14 @@ func (h *TrainerHandler) GetWorkoutsForPlan(c *gin.Context) {
 
 type AssignExerciseToWorkoutRequest struct {
 	ExerciseID   string  `json:"exerciseId" binding:"required"` // Exercise ObjectID hex
-	Sets         *int    `json:"sets"`                          // Optional pointer allows distinguishing 0 from omitted
-	Reps         *string `json:"reps"`                          // e.g., "8-12", "AMRAP"
-	Rest         *string `json:"rest"`                          // e.g., "60s", "2m"
-	Tempo        *string `json:"tempo"`                         // e.g., "2010"
-	Weight       *string `json:"weight"`                        // e.g., "10kg", "BW", "RPE 8"
-	Duration     *string `json:"duration"`                      // e.g., "30min", "5km"
-	Sequence     int     `json:"sequence" binding:"required,min=0"` // Order within workout
-	TrainerNotes string  `json:"trainerNotes"`
+	Sets         *int    `json:"sets" binding:"omitempty"`                          // Optional pointer allows distinguishing 0 from omitted
+	Reps         *string `json:"reps" binding:"omitempty"`                          // e.g., "8-12", "AMRAP"
+	Rest         *string `json:"rest" binding:"omitempty"`                          // e.g., "60s", "2m"
+	Tempo        *string `json:"tempo" binding:"omitempty"`                         // e.g., "2010"
+	Weight       *string `json:"weight" binding:"omitempty"`                        // e.g., "10kg", "BW", "RPE 8"
+	Duration     *string `json:"duration" binding:"omitempty"`                      // e.g., "30min", "5km"
+	Sequence     *int     `json:"sequence" binding:"required,min=0"` // Order within workout
+	TrainerNotes string  `json:"trainerNotes" binding:"omitempty"`
 	// Note: We don't include WorkoutID in the *body* because it's in the URL path.
 }
 
@@ -649,6 +669,19 @@ func (h *TrainerHandler) AssignExerciseToWorkout(c *gin.Context) {
 	}
 
     // Construct the domain.Assignment object from the request DTO
+    var sequenceVal int
+    if req.Sequence == nil {
+        // This case should ideally be caught by `binding:"required"` if it means "not null".
+        // If "required" on *int only means "key must be present", then JSON `{"sequence": null}`
+        // would result in req.Sequence being nil.
+        // For now, if it passes validation, we assume req.Sequence is not nil.
+        // If it could be nil, you need to decide what that means (e.g., default to 0 or error).
+        // Given the "required" tag, a nil pointer here would mean the binding is not enforcing non-null.
+        abortWithError(c, http.StatusBadRequest, "Validation error: Sequence is required but was null or not provided correctly.")
+        return
+    }
+    sequenceVal = *req.Sequence
+
     assignmentDetails := domain.Assignment{
         // WorkoutID and ExerciseID will be set/validated by the service
         Sets:           req.Sets,
@@ -657,7 +690,7 @@ func (h *TrainerHandler) AssignExerciseToWorkout(c *gin.Context) {
         Tempo:          req.Tempo,
         Weight:         req.Weight,
         Duration:       req.Duration,
-        Sequence:       req.Sequence,
+        Sequence:       sequenceVal,
         TrainerNotes:   req.TrainerNotes,
         // Status will default in repo/service, other fields are for client interaction
     }
@@ -738,4 +771,59 @@ func (h *TrainerHandler) GetAssignmentsForWorkout(c *gin.Context) {
 			return
 	}
 	c.JSON(http.StatusOK, MapAssignmentsToResponse(assignments))
+}
+
+// --- DTO for Video Download URL Response ---
+type VideoDownloadURLResponse struct {
+	DownloadURL string `json:"downloadUrl"`
+}
+
+// --- Handler Method for Getting Video Download URL ---
+
+// GetAssignmentVideoDownloadURL godoc
+// @Summary Get a pre-signed download URL for a client's assignment video
+// @Description Allows a trainer to get a temporary URL to view a video uploaded by a client for an assignment.
+// @Tags Trainer Assignments
+// @Produce json
+// @Security BearerAuth
+// @Param assignmentId path string true "Assignment's ObjectID Hex"
+// @Success 200 {object} VideoDownloadURLResponse "Pre-signed S3 URL for video download"
+// @Failure 400 {object} gin.H "Invalid assignment ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (trainer does not own this assignment/workout)"
+// @Failure 404 {object} gin.H "Assignment or Upload not found"
+// @Failure 500 {object} gin.H "Internal Server Error (e.g., S3 error)"
+// @Router /trainer/assignments/{assignmentId}/video-download-url [get]
+func (h *TrainerHandler) GetAssignmentVideoDownloadURL(c *gin.Context) {
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil {
+			abortWithError(c, http.StatusUnauthorized, "Unable to identify trainer.")
+			return
+	}
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr) // Assume valid from token
+
+	assignmentIDHex := c.Param("assignmentId")
+	assignmentID, err := primitive.ObjectIDFromHex(assignmentIDHex)
+	if err != nil {
+			abortWithError(c, http.StatusBadRequest, "Invalid assignment ID format.")
+			return
+	}
+
+	downloadURL, err := h.trainerService.GetAssignmentVideoDownloadURL(c.Request.Context(), trainerID, assignmentID)
+	if err != nil {
+			// Map service errors to HTTP status codes
+			if errors.Is(err, service.ErrAssignmentNotFound) || errors.Is(err, service.ErrWorkoutNotFound) || errors.Is(err, service.ErrUploadNotFoundForAssignment) {
+					abortWithError(c, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, service.ErrAssignmentAccessDenied) {
+					abortWithError(c, http.StatusForbidden, err.Error())
+			} else if errors.Is(err, service.ErrS3URLGenerationFailed) {
+					 abortWithError(c, http.StatusInternalServerError, "Could not generate video URL.")
+			} else {
+					// log.Printf("Error getting video download URL for assignment %s: %v", assignmentIDHex, err)
+					abortWithError(c, http.StatusInternalServerError, "Failed to get video download URL.")
+			}
+			return
+	}
+
+	c.JSON(http.StatusOK, VideoDownloadURLResponse{DownloadURL: downloadURL})
 }

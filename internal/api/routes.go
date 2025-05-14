@@ -23,7 +23,7 @@ func SetupRoutes(
 	// ---> Create ExerciseHandler instance <---
 	exerciseHandler := NewExerciseHandler(exerciseService)
 	trainerHandler := NewTrainerHandler(trainerService)
-	// clientHandler := NewClientHandler(clientService, exerciseService)
+	clientHandler := NewClientHandler(clientService)
 
 	authMiddleware := AuthMiddleware(jwtSecret) // Using the jwtSecret parameter
 
@@ -105,13 +105,31 @@ func SetupRoutes(
 			// GET /api/v1/trainer/workouts/{workoutId}/assignments (To VIEW assignments for a workout)
 			trainerApiGroup.GET("/workouts/:workoutId/assignments", trainerHandler.GetAssignmentsForWorkout)
 
+			// GET /api/v1/trainer/assignments/{assignmentId}/video-download-url
+			trainerApiGroup.GET("/assignments/:assignmentId/video-download-url", trainerHandler.GetAssignmentVideoDownloadURL)
 			// TODO: GET /api/v1/trainer/workouts/{workoutId}/assignments
 			// TODO: GET /api/v1/trainer/assignments/{assignmentId} // For feedback maybe?
 			// TODO: POST /api/v1/trainer/assignments/:assignmentId/feedback (calls trainerHandler.SubmitFeedback)
 		}
 
-		// TODO: Add routes for Clients
-		// ...
+		clientApiGroup := protected.Group("/client")
+		clientApiGroup.Use(RoleMiddleware(domain.RoleClient))
+		{
+			// Training Plans for the client
+			clientApiGroup.GET("/plans", clientHandler.GetMyTrainingPlans)
+
+			// Workouts for a specific plan of the client
+			clientApiGroup.GET("/plans/:planId/workouts", clientHandler.GetWorkoutsForMyPlan)
+
+			// Assignments (exercises) for a specific workout of the client
+			clientApiGroup.GET("/workouts/:workoutId/assignments", clientHandler.GetAssignmentsForMyWorkout)
+
+			clientApiGroup.PATCH("/assignments/:assignmentId/status", clientHandler.UpdateMyAssignmentStatus)
+			
+			// --- NEW Routes for Upload Process ---
+			clientApiGroup.POST("/assignments/:assignmentId/upload-url", clientHandler.RequestUploadURLForAssignment)
+			clientApiGroup.POST("/assignments/:assignmentId/upload-confirm", clientHandler.ConfirmUploadForAssignment)
+		}
 	}
 }
 

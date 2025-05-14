@@ -1,258 +1,356 @@
 #!/bin/bash
 
-# Simple API Test Script for Fitness App
+# API Test Script for Fitness App (including Client View Endpoints)
 
 # --- Configuration ---
 BASE_URL="http://localhost:8080/api/v1"
+TIMESTAMP=$(date +%s) # Unique IDs for this test run
 
-# Unique identifiers using timestamp
-TIMESTAMP=$(date +%s)
+# Trainer
 TRAINER_NAME="Test Trainer $TIMESTAMP"
 TRAINER_EMAIL="trainer.$TIMESTAMP@example.com"
 TRAINER_PASS="password123"
 
-CLIENT_ONE_NAME="Test Client One $TIMESTAMP"
-CLIENT_ONE_EMAIL="clientone.$TIMESTAMP@example.com"
-CLIENT_ONE_PASS="password456"
+# Client
+CLIENT_NAME="Test Client $TIMESTAMP"
+CLIENT_EMAIL="client.$TIMESTAMP@example.com"
+CLIENT_PASS="password456"
 
-CLIENT_TWO_NAME="Test Client Two $TIMESTAMP" # For future tests or manual assignment
-CLIENT_TWO_EMAIL="clienttwo.$TIMESTAMP@example.com"
-CLIENT_TWO_PASS="password789"
-
-
-# Variables to store tokens and IDs
+# Variables to store dynamic data
 TRAINER_TOKEN=""
-TRAINER_ID="" # We can get this from the /me endpoint or login response
+TRAINER_ID=""
+CLIENT_TOKEN=""
+CLIENT_ID=""
+EXERCISE_ID_ONE=""
+TRAINING_PLAN_ID_ONE=""
+WORKOUT_ID_ONE=""
+ASSIGNMENT_ID_ONE=""
 
-CLIENT_ONE_TOKEN=""
-CLIENT_ONE_ID="" # We can get this from its login response
 
 # --- Helper Functions ---
-
-# Function to check if jq is installed
 check_jq() {
   if ! command -v jq &> /dev/null; then
-    echo "Error: jq is not installed. Please install jq (e.g., 'brew install jq' or 'sudo apt install jq')."
+    echo "Error: jq is not installed. Please install jq."
     exit 1
   fi
 }
 
-# Function to make requests and check status code
-# Usage: expect_status <expected_code> <curl_args...>
 expect_status() {
   local expected_code="$1"
   shift
-  local http_code=$(curl -s -o /dev/null -w "%{http_code}" "$@")
+  local response_and_code=$(curl -s -w "\n%{http_code}" "$@") # Capture body and code
+  local http_code=$(echo "$response_and_code" | tail -n1)
+  local response_body=$(echo "$response_and_code" | sed '$d')
+
   if [[ "$http_code" -ne "$expected_code" ]]; then
     echo "❌ FAILED: Expected status $expected_code, but got $http_code for request: curl $*"
-    # Optionally print response body on error:
-    # echo "Response body:"
-    # curl -s "$@"
+    echo "   Response Body: $response_body"
     return 1
   else
     echo "✅ PASSED: Received expected status $expected_code."
+    # Optionally echo body for successful 200/201 if needed for debugging
+    # if [[ "$http_code" -eq 200 || "$http_code" -eq 201 ]]; then
+    #   echo "   Response Body: $response_body"
+    # fi
     return 0
   fi
 }
 
-# --- Test Execution ---
+# Function to make request and store response body
+# Usage: store_response VARIABLE_NAME <curl_args...>
+store_response() {
+  local var_name="$1"
+  shift
+  local response_and_code=$(curl -s -w "\n%{http_code}" "$@")
+  local http_code=$(echo "$response_and_code" | tail -n1)
+  local response_body=$(echo "$response_and_code" | sed '$d')
 
+  if [[ "$http_code" -ne 200 && "$http_code" -ne 201 ]]; then # Expect 200 or 201 for success
+    echo "❌ FAILED (store_response): Expected status 200/201, but got $http_code for request: curl $*"
+    echo "   Response Body: $response_body"
+    eval "$var_name=''" # Clear variable on failure
+    return 1
+  else
+    echo "✅ PASSED (store_response): Received status $http_code."
+    eval "$var_name='$response_body'" # Store response body
+    return 0
+  fi
+}
+
+
+# --- Test Execution ---
 check_jq
 
 echo "🚀 Starting API Tests for Fitness App ($BASE_URL)..."
 echo "--------------------------------------------------"
 
-# 1. Ping Test
-echo "🧪 Test 1: Checking API health (/ping)..."
-expect_status 200 "$BASE_URL/ping"
-echo "--------------------------------------------------"
+# === Phase 1: Setup - Users ===
+echo "Phase 1: User Registration & Login"
 
-# 2. Register Trainer
-echo "🧪 Test 2: Registering a new Trainer ($TRAINER_EMAIL)..."
+# 1. Register Trainer
+echo "🧪 Test 1.1: Registering Trainer ($TRAINER_EMAIL)..."
 register_payload_trainer=$(cat <<EOF
 { "name": "$TRAINER_NAME", "email": "$TRAINER_EMAIL", "password": "$TRAINER_PASS", "role": "trainer" }
 EOF
 )
-expect_status 201 -X POST -H "Content-Type: application/json" -d "$register_payload_trainer" "$BASE_URL/auth/register"
-echo "--------------------------------------------------"
+expect_status 201 -X POST -H "Content-Type: application/json" -d "$register_payload_trainer" "$BASE_URL/auth/register" || exit 1
+echo "---"
 
-# 3. Register Client One
-echo "🧪 Test 3: Registering Client One ($CLIENT_ONE_EMAIL)..."
-register_payload_client_one=$(cat <<EOF
-{ "name": "$CLIENT_ONE_NAME", "email": "$CLIENT_ONE_EMAIL", "password": "$CLIENT_ONE_PASS", "role": "client" }
+# 2. Register Client
+echo "🧪 Test 1.2: Registering Client ($CLIENT_EMAIL)..."
+register_payload_client=$(cat <<EOF
+{ "name": "$CLIENT_NAME", "email": "$CLIENT_EMAIL", "password": "$CLIENT_PASS", "role": "client" }
 EOF
 )
-expect_status 201 -X POST -H "Content-Type: application/json" -d "$register_payload_client_one" "$BASE_URL/auth/register"
-echo "--------------------------------------------------"
+expect_status 201 -X POST -H "Content-Type: application/json" -d "$register_payload_client" "$BASE_URL/auth/register" || exit 1
+echo "---"
 
-# 4. Register Client Two (for potential future use)
-echo "🧪 Test 4: Registering Client Two ($CLIENT_TWO_EMAIL)..."
-register_payload_client_two=$(cat <<EOF
-{ "name": "$CLIENT_TWO_NAME", "email": "$CLIENT_TWO_EMAIL", "password": "$CLIENT_TWO_PASS", "role": "client" }
-EOF
-)
-expect_status 201 -X POST -H "Content-Type: application/json" -d "$register_payload_client_two" "$BASE_URL/auth/register"
-echo "--------------------------------------------------"
-
-# 5. Login Trainer
-echo "🧪 Test 5: Logging in as Trainer..."
+# 3. Login Trainer
+echo "🧪 Test 1.3: Logging in as Trainer..."
 login_payload_trainer=$(cat <<EOF
 { "email": "$TRAINER_EMAIL", "password": "$TRAINER_PASS" }
 EOF
 )
-login_response_trainer=$(curl -s -X POST -H "Content-Type: application/json" -d "$login_payload_trainer" "$BASE_URL/auth/login")
-TRAINER_TOKEN=$(echo "$login_response_trainer" | jq -r '.token // empty')
-TRAINER_ID=$(echo "$login_response_trainer" | jq -r '.user.id // empty') # Get trainer's ID
-
-if [[ -z "$TRAINER_TOKEN" ]]; then
-  echo "❌ FAILED: Could not extract Trainer token."
-  exit 1 # Critical failure
-else
-  echo "✅ PASSED: Trainer login successful. Token stored. Trainer ID: $TRAINER_ID"
-fi
+store_response LOGIN_RESPONSE_TRAINER -X POST -H "Content-Type: application/json" -d "$login_payload_trainer" "$BASE_URL/auth/login" || exit 1
+TRAINER_TOKEN=$(echo "$LOGIN_RESPONSE_TRAINER" | jq -r '.token // empty')
+TRAINER_ID=$(echo "$LOGIN_RESPONSE_TRAINER" | jq -r '.user.id // empty')
+if [[ -z "$TRAINER_TOKEN" ]]; then echo "❌ FAILED: Could not get Trainer token."; exit 1; fi
+echo "   Trainer Token: HIDDEN, Trainer ID: $TRAINER_ID"
 echo "--------------------------------------------------"
 
-# 6. Login Client One (to get its ID for verification later, though not strictly needed for add by email)
-echo "🧪 Test 6: Logging in as Client One..."
-login_payload_client_one=$(cat <<EOF
-{ "email": "$CLIENT_ONE_EMAIL", "password": "$CLIENT_ONE_PASS" }
+
+# === Phase 2: Trainer Sets Up Client and Program ===
+echo "Phase 2: Trainer Setup (Add Client, Exercise, Plan, Workout, Assignment)"
+
+# 4. Trainer Adds Client
+echo "🧪 Test 2.1: Trainer adds Client ($CLIENT_EMAIL)..."
+add_client_payload=$(cat <<EOF
+{ "clientEmail": "$CLIENT_EMAIL" }
 EOF
 )
-login_response_client_one=$(curl -s -X POST -H "Content-Type: application/json" -d "$login_payload_client_one" "$BASE_URL/auth/login")
-CLIENT_ONE_ID=$(echo "$login_response_client_one" | jq -r '.user.id // empty') # Get client's ID
+expect_status 200 -X POST -H "Authorization: Bearer $TRAINER_TOKEN" -H "Content-Type: application/json" -d "$add_client_payload" "$BASE_URL/trainer/clients" || exit 1
+echo "---"
 
-if [[ -z "$CLIENT_ONE_ID" ]]; then
-  echo "❌ FAILED: Could not extract Client One ID."
-  # Not exiting, as it's not critical for all subsequent tests
-else
-  echo "✅ PASSED: Client One login successful. Client ID: $CLIENT_ONE_ID"
-fi
-echo "--------------------------------------------------"
-
-
-# 7. Trainer: Add Client One by Email (Protected - Trainer Role)
-echo "🧪 Test 7: Trainer adds Client One by email..."
-if [[ -n "$TRAINER_TOKEN" ]]; then
-  add_client_payload=$(cat <<EOF
-{ "clientEmail": "$CLIENT_ONE_EMAIL" }
+# 5. Trainer Creates an Exercise
+echo "🧪 Test 2.2: Trainer creates an Exercise..."
+exercise_payload=$(cat <<EOF
+{
+  "name": "Test Push-ups $TIMESTAMP",
+  "description": "Classic upper body strength.",
+  "muscleGroup": "Chest, Triceps, Shoulders",
+  "executionTechnic": "Keep body straight, lower till chest nears floor.",
+  "applicability": "Any",
+  "difficulty": "Medium"
+}
 EOF
-  )
-  add_client_response=$(curl -s -w "\n%{http_code}" -X POST \
-    -H "Authorization: Bearer $TRAINER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$add_client_payload" \
-    "$BASE_URL/trainer/clients")
-  add_client_http_code=$(echo "$add_client_response" | tail -n1)
-  add_client_body=$(echo "$add_client_response" | sed '$d')
+)
+store_response CREATE_EXERCISE_RESPONSE -X POST -H "Authorization: Bearer $TRAINER_TOKEN" -H "Content-Type: application/json" -d "$exercise_payload" "$BASE_URL/exercises" || exit 1
+EXERCISE_ID_ONE=$(echo "$CREATE_EXERCISE_RESPONSE" | jq -r '.id // empty')
+if [[ -z "$EXERCISE_ID_ONE" ]]; then echo "❌ FAILED: Could not get Exercise ID."; exit 1; fi
+echo "   Created Exercise ID: $EXERCISE_ID_ONE"
+echo "---"
 
-  if [[ "$add_client_http_code" -eq 200 ]]; then
-    echo "✅ PASSED: Trainer successfully added Client One. Status 200."
-    # Verify added client details (optional)
-    added_client_email=$(echo "$add_client_body" | jq -r '.email // empty')
-    added_client_trainer_id=$(echo "$add_client_body" | jq -r '.trainerId // empty')
-    if [[ "$added_client_email" == "$CLIENT_ONE_EMAIL" ]] && [[ "$added_client_trainer_id" == "$TRAINER_ID" ]]; then
-        echo "   ✅ Client details in response are correct."
-    else
-        echo "   ⚠️ WARNING: Client details in add response might be incorrect or missing."
-        echo "      Response body: $add_client_body"
-    fi
-  else
-    echo "❌ FAILED: Trainer failed to add Client One. Expected 200, got $add_client_http_code."
-    echo "   Response body: $add_client_body"
-  fi
-else
-  echo "⚠️ SKIPPED: Cannot test add client because Trainer login failed."
-fi
-echo "--------------------------------------------------"
+# 6. Trainer Creates a Training Plan for the Client
+echo "🧪 Test 2.3: Trainer creates a Training Plan for Client..."
+# First, get Client ID from the managed clients list (or assume it's CLIENT_ID if we logged them in)
+# For simplicity, let's fetch clients again to get the ID if needed, or use the ID from client registration if we had it
+# Assume the client added was the one we registered (CLIENT_EMAIL)
+# Let's get client ID from login response when CLIENT logs in, or if trainer/clients returns full user object
+# For now, let's get the actual client ID by fetching the specific client.
+# This is a bit more robust than assuming based on email.
+# A better API might return the client ID upon successful addition to trainer.
+temp_client_list_resp=$(curl -s -X GET -H "Authorization: Bearer $TRAINER_TOKEN" "$BASE_URL/trainer/clients")
+CLIENT_ID=$(echo "$temp_client_list_resp" | jq -r --arg email "$CLIENT_EMAIL" '.[] | select(.email == $email) | .id // empty')
+if [[ -z "$CLIENT_ID" ]]; then echo "❌ FAILED: Could not find Client ID for $CLIENT_EMAIL in trainer's list."; exit 1; fi
+echo "   Found Client ID for assignment: $CLIENT_ID"
 
-# 8. Trainer: Attempt to Add Non-Existent Client (Protected - Trainer Role)
-echo "🧪 Test 8: Trainer attempts to add non-existent client (expect 404)..."
-if [[ -n "$TRAINER_TOKEN" ]]; then
-  add_non_existent_payload=$(cat <<EOF
-{ "clientEmail": "nonexistent.$TIMESTAMP@example.com" }
+plan_payload=$(cat <<EOF
+{
+  "name": "Client Strength Plan $TIMESTAMP",
+  "description": "4-week beginner strength program.",
+  "isActive": true
+}
 EOF
-  )
-  expect_status 404 -X POST \
-    -H "Authorization: Bearer $TRAINER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$add_non_existent_payload" \
-    "$BASE_URL/trainer/clients"
-else
-  echo "⚠️ SKIPPED: Cannot test add non-existent client."
-fi
-echo "--------------------------------------------------"
+)
+store_response CREATE_PLAN_RESPONSE -X POST \
+  -H "Authorization: Bearer $TRAINER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$plan_payload" \
+  "$BASE_URL/trainer/clients/$CLIENT_ID/plans" || exit 1
+TRAINING_PLAN_ID_ONE=$(echo "$CREATE_PLAN_RESPONSE" | jq -r '.id // empty')
+if [[ -z "$TRAINING_PLAN_ID_ONE" ]]; then echo "❌ FAILED: Could not get Training Plan ID."; exit 1; fi
+echo "   Created Training Plan ID: $TRAINING_PLAN_ID_ONE"
+echo "---"
 
-# 9. Trainer: Attempt to Add Self as Client (Protected - Trainer Role, expect error, e.g., 403)
-echo "🧪 Test 9: Trainer attempts to add self as client (expect 403 - not a client)..."
-if [[ -n "$TRAINER_TOKEN" ]]; then
-  add_self_payload=$(cat <<EOF
-{ "clientEmail": "$TRAINER_EMAIL" }
+# 7. Trainer Creates a Workout in that Plan
+echo "🧪 Test 2.4: Trainer creates a Workout in the Plan..."
+workout_payload=$(cat <<EOF
+{
+  "name": "Full Body A - $TIMESTAMP",
+  "sequence": 0,
+  "notes": "Focus on form."
+}
 EOF
-  )
-  expect_status 403 -X POST \
-    -H "Authorization: Bearer $TRAINER_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$add_self_payload" \
-    "$BASE_URL/trainer/clients"
-else
-  echo "⚠️ SKIPPED: Cannot test add self as client."
-fi
-echo "--------------------------------------------------"
+)
+store_response CREATE_WORKOUT_RESPONSE -X POST \
+  -H "Authorization: Bearer $TRAINER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$workout_payload" \
+  "$BASE_URL/trainer/plans/$TRAINING_PLAN_ID_ONE/workouts" || exit 1
+WORKOUT_ID_ONE=$(echo "$CREATE_WORKOUT_RESPONSE" | jq -r '.id // empty')
+if [[ -z "$WORKOUT_ID_ONE" ]]; then echo "❌ FAILED: Could not get Workout ID."; exit 1; fi
+echo "   Created Workout ID: $WORKOUT_ID_ONE"
+echo "---"
 
-
-# 10. Trainer: Get Managed Clients (Protected - Trainer Role)
-echo "🧪 Test 10: Trainer fetches managed clients..."
-if [[ -n "$TRAINER_TOKEN" ]]; then
-  get_clients_response=$(curl -s -w "\n%{http_code}" -X GET \
-    -H "Authorization: Bearer $TRAINER_TOKEN" \
-    "$BASE_URL/trainer/clients")
-  get_clients_http_code=$(echo "$get_clients_response" | tail -n1)
-  get_clients_body=$(echo "$get_clients_response" | sed '$d')
-
-  if [[ "$get_clients_http_code" -eq 200 ]]; then
-    echo "✅ PASSED: Trainer successfully fetched managed clients. Status 200."
-    # Verify Client One is in the list
-    client_one_found=$(echo "$get_clients_body" | jq --arg email "$CLIENT_ONE_EMAIL" '.[] | select(.email == $email) | .email' | wc -l | tr -d ' ')
-    if [[ "$client_one_found" -eq 1 ]]; then
-      echo "   ✅ Client One ($CLIENT_ONE_EMAIL) found in the managed list."
-    else
-      echo "   ❌ FAILED: Client One ($CLIENT_ONE_EMAIL) NOT found in the managed list."
-      echo "      Response body: $get_clients_body"
-    fi
-  else
-    echo "❌ FAILED: Trainer failed to fetch managed clients. Expected 200, got $get_clients_http_code."
-    echo "   Response body: $get_clients_body"
-  fi
-else
-  echo "⚠️ SKIPPED: Cannot test get managed clients."
-fi
-echo "--------------------------------------------------"
-
-# 11. Client (non-trainer): Attempt to Add Client (Protected - expect 403 Forbidden)
-echo "🧪 Test 11: Client attempts to add another client (expect 403)..."
-# First, log in Client One to get a token, if not already done/valid
-if [[ -z "$CLIENT_ONE_TOKEN" ]]; then # Simple check, assumes token is still valid if set
-    temp_login_resp=$(curl -s -X POST -H "Content-Type: application/json" -d "$login_payload_client_one" "$BASE_URL/auth/login")
-    CLIENT_ONE_TOKEN=$(echo "$temp_login_resp" | jq -r '.token // empty')
-fi
-
-if [[ -n "$CLIENT_ONE_TOKEN" ]]; then
-  add_client_as_client_payload=$(cat <<EOF
-{ "clientEmail": "$CLIENT_TWO_EMAIL" }
+# 8. Trainer Assigns Exercise to Workout
+echo "🧪 Test 2.5: Trainer assigns Exercise to Workout..."
+assign_payload=$(cat <<EOF
+{
+  "exerciseId": "$EXERCISE_ID_ONE",
+  "sets": 3,
+  "reps": "8-12",
+  "rest": "60s",
+  "sequence": 0,
+  "trainerNotes": "First exercise, warm up well."
+}
 EOF
-  )
-  expect_status 403 -X POST \
-    -H "Authorization: Bearer $CLIENT_ONE_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "$add_client_as_client_payload" \
-    "$BASE_URL/trainer/clients" # Using the trainer endpoint
-else
-  echo "⚠️ SKIPPED: Cannot test client adding client because Client One login failed or token missing."
-fi
+)
+store_response CREATE_ASSIGNMENT_RESPONSE -X POST \
+  -H "Authorization: Bearer $TRAINER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$assign_payload" \
+  "$BASE_URL/trainer/workouts/$WORKOUT_ID_ONE/exercises" || exit 1
+ASSIGNMENT_ID_ONE=$(echo "$CREATE_ASSIGNMENT_RESPONSE" | jq -r '.id // empty')
+if [[ -z "$ASSIGNMENT_ID_ONE" ]]; then echo "❌ FAILED: Could not get Assignment ID."; exit 1; fi
+echo "   Created Assignment ID: $ASSIGNMENT_ID_ONE"
 echo "--------------------------------------------------"
 
 
-# TODO: Add test case: Trainer tries to add Client One AGAIN (should ideally be idempotent or return a specific message/status)
-# Your current service logic might just return 200 OK and the client if already assigned to *this* trainer.
+# === Phase 3: Client Interaction ===
+echo "Phase 3: Client Interaction (Login, View, Mark Complete, Upload Video)"
+# 3.1 Login Client
+echo "🧪 Test 3.1: Logging in as Client ($CLIENT_EMAIL)..."
+login_payload_client=$(jq -n --arg email "$CLIENT_EMAIL" --arg pass "$CLIENT_PASS" '{email: $email, password: $pass}')
+store_response LOGIN_RESPONSE_CLIENT -X POST -H "Content-Type: application/json" -d "$login_payload_client" "$BASE_URL/auth/login" || exit 1
+CLIENT_TOKEN=$(echo "$LOGIN_RESPONSE_CLIENT" | jq -r '.token // empty')
+if [[ -z "$CLIENT_TOKEN" ]]; then echo "❌ FAILED: Could not get Client token."; exit 1; fi
+echo "   Client Token: SET"
+# 3.2 Client Fetches Plans, Workouts, Assignments (Simplified checks from before)
+echo "🧪 Test 3.2: Client fetches their program structure..."
+expect_status 200 -X GET -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/client/plans" || exit 1
+expect_status 200 -X GET -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/client/plans/$TRAINING_PLAN_ID_ONE/workouts" || exit 1
+expect_status 200 -X GET -H "Authorization: Bearer $CLIENT_TOKEN" "$BASE_URL/client/workouts/$WORKOUT_ID_ONE/assignments" || exit 1
+echo "---"
 
-echo "🏁 API Tests Finished."
+# 3.3 Client Marks Assignment as Complete
+echo "🧪 Test 3.3: Client marks Assignment $ASSIGNMENT_ID_ONE as 'completed'..."
+status_payload=$(jq -n '{status: "completed"}')
+store_response UPDATE_STATUS_RESPONSE -X PATCH \
+  -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$status_payload" \
+  "$BASE_URL/client/assignments/$ASSIGNMENT_ID_ONE/status" || exit 1
+updated_status=$(echo "$UPDATE_STATUS_RESPONSE" | jq -r '.status // empty')
+if [[ "$updated_status" != "completed" ]]; then echo "❌ FAILED: Status not updated to completed."; exit 1; fi
+echo "   Assignment status updated to: $updated_status"
+echo "---"
+
+# 3.4 Client Requests S3 Upload URL for the Assignment
+echo "🧪 Test 3.4: Client requests S3 Upload URL for Assignment $ASSIGNMENT_ID_ONE..."
+# For this test, we need a dummy video file. Create one if it doesn't exist.
+DUMMY_VIDEO_FILE="dummy_video_test.mp4"
+DUMMY_VIDEO_CONTENT_TYPE="video/mp4"
+if [ ! -f "$DUMMY_VIDEO_FILE" ]; then
+  echo "Creating dummy video file: $DUMMY_VIDEO_FILE"
+  dd if=/dev/zero of="$DUMMY_VIDEO_FILE" bs=1024 count=10 # Create a 10KB dummy file
+fi
+DUMMY_VIDEO_SIZE=$(stat -f%z "$DUMMY_VIDEO_FILE") # macOS syntax for stat; for Linux use: stat -c%s
+
+upload_url_payload=$(jq -n --arg type "$DUMMY_VIDEO_CONTENT_TYPE" '{contentType: $type}')
+store_response UPLOAD_URL_RESPONSE -X POST \
+  -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$upload_url_payload" \
+  "$BASE_URL/client/assignments/$ASSIGNMENT_ID_ONE/upload-url" || exit 1
+
+S3_UPLOAD_URL=$(echo "$UPLOAD_URL_RESPONSE" | jq -r '.uploadUrl // empty')
+VIDEO_OBJECT_KEY=$(echo "$UPLOAD_URL_RESPONSE" | jq -r '.objectKey // empty')
+
+if [[ -z "$S3_UPLOAD_URL" || -z "$VIDEO_OBJECT_KEY" ]]; then echo "❌ FAILED: Could not get S3 Upload URL or Object Key."; exit 1; fi
+echo "   S3 Upload URL: RECEIVED (long URL)"
+echo "   S3 Object Key: $VIDEO_OBJECT_KEY"
+echo "---"
+
+# 3.5 Client Uploads Dummy Video to S3
+echo "🧪 Test 3.5: Client uploads dummy video to S3 URL..."
+# We expect MinIO to be running locally without SSL for this test.
+# The S3_UPLOAD_URL should point to localhost:9000 (or your Mac's IP if testing device against Mac)
+# Ensure your Go backend's S3_PUBLIC_ENDPOINT is configured to generate this localhost URL.
+s3_upload_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X PUT \
+  -H "Content-Type: $DUMMY_VIDEO_CONTENT_TYPE" \
+  --data-binary @"$DUMMY_VIDEO_FILE" \
+  "$S3_UPLOAD_URL")
+
+if [[ "$s3_upload_http_code" -ne 200 ]]; then
+  echo "❌ FAILED: S3 upload failed. Expected 200, Got $s3_upload_http_code."
+  echo "   Attempted to upload to: $S3_UPLOAD_URL"
+  exit 1
+else
+  echo "✅ PASSED: Dummy video uploaded to S3. Status $s3_upload_http_code."
+fi
+echo "---"
+
+# 3.6 Client Confirms Upload with Backend
+echo "🧪 Test 3.6: Client confirms video upload with backend..."
+confirm_payload=$(jq -n \
+  --arg key "$VIDEO_OBJECT_KEY" \
+  --arg name "$DUMMY_VIDEO_FILE" \
+  --argjson size "$DUMMY_VIDEO_SIZE" \
+  --arg type "$DUMMY_VIDEO_CONTENT_TYPE" \
+  '{objectKey: $key, fileName: $name, fileSize: $size, contentType: $type}')
+
+store_response CONFIRM_UPLOAD_RESPONSE -X POST \
+  -H "Authorization: Bearer $CLIENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$confirm_payload" \
+  "$BASE_URL/client/assignments/$ASSIGNMENT_ID_ONE/upload-confirm" || exit 1
+
+confirmed_status=$(echo "$CONFIRM_UPLOAD_RESPONSE" | jq -r '.status // empty')
+confirmed_upload_id=$(echo "$CONFIRM_UPLOAD_RESPONSE" | jq -r '.uploadId // empty')
+
+if [[ "$confirmed_status" != "submitted" || -z "$confirmed_upload_id" ]]; then
+  echo "❌ FAILED: Upload confirmation failed or status not 'submitted' or uploadId missing."
+  echo "   Response: $CONFIRM_UPLOAD_RESPONSE"
+  exit 1
+fi
+echo "   Upload confirmed. Assignment status: $confirmed_status, Upload ID: $confirmed_upload_id"
+echo "--------------------------------------------------"
+
+
+# === Phase 4: Trainer Views Client Submission ===
+echo "Phase 4: Trainer Views Submission"
+
+# 4.1 Trainer Fetches Video Download URL
+echo "🧪 Test 4.1: Trainer fetches video download URL for Assignment $ASSIGNMENT_ID_ONE..."
+store_response TRAINER_VIDEO_URL_RESPONSE -X GET \
+  -H "Authorization: Bearer $TRAINER_TOKEN" \
+  "$BASE_URL/trainer/assignments/$ASSIGNMENT_ID_ONE/video-download-url" || exit 1
+
+VIDEO_DOWNLOAD_URL=$(echo "$TRAINER_VIDEO_URL_RESPONSE" | jq -r '.downloadUrl // empty')
+if [[ -z "$VIDEO_DOWNLOAD_URL" ]]; then echo "❌ FAILED: Could not get video download URL."; exit 1; fi
+echo "   Video Download URL: RECEIVED (long URL)"
+echo "---"
+
+# 4.2 (Informational) Trainer could now use this URL to view the video
+echo "   ℹ️ Trainer can now use this URL to download/view the video: $VIDEO_DOWNLOAD_URL"
+echo "      (This script won't download it, just verifies URL generation)"
+echo "--------------------------------------------------"
+
+echo "🏁 All API Tests Finished Successfully."
+
+# Cleanup dummy file
+if [ -f "$DUMMY_VIDEO_FILE" ]; then
+  rm "$DUMMY_VIDEO_FILE"
+  echo "🧹 Cleaned up $DUMMY_VIDEO_FILE"
+fi

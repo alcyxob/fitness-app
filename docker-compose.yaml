@@ -26,6 +26,7 @@ services:
       # Use the service name 'minio' as the host
       # Use http because local MinIO doesn't have SSL configured by default
       S3_ENDPOINT: "http://minio:9000"
+      S3_PUBLIC_ENDPOINT: "http://localhost:9000"
       S3_REGION: "us-east-1" # MinIO often requires a region setting
       S3_ACCESS_KEY_ID: "minioadmin" # Default MinIO root user/access key
       S3_SECRET_ACCESS_KEY: "minioadmin" # Default MinIO root password/secret key

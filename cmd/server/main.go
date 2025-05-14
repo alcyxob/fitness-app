@@ -91,8 +91,8 @@ func main() {
 	// Pass JWT config directly
 	authService := service.NewAuthService(userRepo, cfg.JWT.Secret, cfg.JWT.Expiration)
 	exerciseService := service.NewExerciseService(exerciseRepo)
-	trainerService := service.NewTrainerService(userRepo, assignmentRepo, exerciseRepo, trainingPlanRepo, workoutRepo)
-	clientService := service.NewClientService(assignmentRepo, uploadRepo, exerciseRepo, workoutRepo, fileStorage)
+	trainerService := service.NewTrainerService(userRepo, assignmentRepo, exerciseRepo, trainingPlanRepo, workoutRepo, uploadRepo, fileStorage)
+	clientService := service.NewClientService(userRepo, assignmentRepo, uploadRepo, exerciseRepo, workoutRepo, trainingPlanRepo, fileStorage)
 
 	// --- Initialize Gin Engine ---
 	// gin.SetMode(gin.ReleaseMode) // Uncomment for production

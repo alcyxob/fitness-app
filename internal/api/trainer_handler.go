@@ -827,3 +827,82 @@ func (h *TrainerHandler) GetAssignmentVideoDownloadURL(c *gin.Context) {
 
 	c.JSON(http.StatusOK, VideoDownloadURLResponse{DownloadURL: downloadURL})
 }
+
+// --- DTO for Submitting Feedback ---
+type SubmitFeedbackRequest struct {
+    Feedback string `json:"feedback"` // Can be empty if only status changes
+    Status   string `json:"status" binding:"required"` // New status, e.g., "reviewed"
+}
+
+
+// --- Handler Method for Submitting Feedback ---
+
+// SubmitFeedbackForAssignment godoc
+// @Summary Submit feedback and update status for a client's assignment
+// @Description Allows a trainer to provide feedback on a submitted assignment and change its status.
+// @Tags Trainer Assignments
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param assignmentId path string true "Assignment's ObjectID Hex"
+// @Param feedbackRequest body SubmitFeedbackRequest true "Feedback and new status"
+// @Success 200 {object} AssignmentResponse "Feedback submitted and assignment updated"
+// @Failure 400 {object} gin.H "Invalid input (validation error, invalid ID, invalid status)"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (trainer does not own assignment, or invalid status transition)"
+// @Failure 404 {object} gin.H "Assignment or associated Workout not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/assignments/{assignmentId}/feedback [patch]
+func (h *TrainerHandler) SubmitFeedbackForAssignment(c *gin.Context) {
+    trainerIDStr, err := getUserIDFromContext(c)
+    if err != nil {
+        abortWithError(c, http.StatusUnauthorized, "Unable to identify trainer.")
+        return
+    }
+    trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr) // Assume valid from token
+
+    assignmentIDHex := c.Param("assignmentId")
+    assignmentID, err := primitive.ObjectIDFromHex(assignmentIDHex)
+    if err != nil {
+        abortWithError(c, http.StatusBadRequest, "Invalid assignment ID format.")
+        return
+    }
+
+    var req SubmitFeedbackRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error())
+        return
+    }
+
+    // Convert string status from request to domain.AssignmentStatus
+    // Add validation here for allowed status strings from trainer
+    newDomainStatus := domain.AssignmentStatus(req.Status)
+    // Example: Trainer can set to "reviewed" or "assigned" (for re-do)
+    if newDomainStatus != domain.StatusReviewed && newDomainStatus != domain.StatusAssigned {
+         abortWithError(c, http.StatusBadRequest, "Invalid target status provided by trainer.")
+         return
+    }
+
+
+    updatedAssignment, err := h.trainerService.SubmitFeedback(
+        c.Request.Context(),
+        trainerID,
+        assignmentID,
+        req.Feedback,
+        newDomainStatus,
+    )
+    if err != nil {
+        // Map service errors
+        if errors.Is(err, service.ErrAssignmentNotFound) || errors.Is(err, service.ErrWorkoutNotFound) {
+            abortWithError(c, http.StatusNotFound, err.Error())
+        } else if errors.Is(err, service.ErrAssignmentAccessDenied) || errors.Is(err, service.ErrInvalidAssignmentStatusUpdate) {
+            abortWithError(c, http.StatusForbidden, err.Error())
+        } else {
+            // log.Printf("Error submitting feedback for assignment %s: %v", assignmentIDHex, err)
+            abortWithError(c, http.StatusInternalServerError, "Failed to submit feedback.")
+        }
+        return
+    }
+
+    c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment))
+}

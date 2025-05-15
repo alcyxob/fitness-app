@@ -107,6 +107,10 @@ func SetupRoutes(
 
 			// GET /api/v1/trainer/assignments/{assignmentId}/video-download-url
 			trainerApiGroup.GET("/assignments/:assignmentId/video-download-url", trainerHandler.GetAssignmentVideoDownloadURL)
+
+			// PATCH /api/v1/trainer/assignments/{assignmentId}/feedback
+			trainerApiGroup.PATCH("/assignments/:assignmentId/feedback", trainerHandler.SubmitFeedbackForAssignment)
+			
 			// TODO: GET /api/v1/trainer/workouts/{workoutId}/assignments
 			// TODO: GET /api/v1/trainer/assignments/{assignmentId} // For feedback maybe?
 			// TODO: POST /api/v1/trainer/assignments/:assignmentId/feedback (calls trainerHandler.SubmitFeedback)

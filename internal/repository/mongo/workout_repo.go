@@ -113,3 +113,53 @@ func EnsureWorkoutIndexes(ctx context.Context, collection *mongo.Collection) {
 		// log.Printf("WARN: Failed to create indexes for collection %s: %v", collection.Name(), err)
 	}
 }
+
+func (r *mongoWorkoutRepository) Update(ctx context.Context, workout *domain.Workout) error {
+	if workout.ID == primitive.NilObjectID {
+			return errors.New("workout ID is required for update")
+	}
+
+	// TrainerID, ClientID, TrainingPlanID should generally not be changed via this simple update.
+	// If they need to change, it's a more complex "move" operation.
+	filter := bson.M{"_id": workout.ID}
+	updateDoc := bson.M{
+			"$set": bson.M{
+					"name":      workout.Name,
+					"dayOfWeek": workout.DayOfWeek,
+					"notes":     workout.Notes,
+					"sequence":  workout.Sequence,
+					"updatedAt": time.Now().UTC(),
+			},
+	}
+
+	result, err := r.collection.UpdateOne(ctx, filter, updateDoc)
+	if err != nil {
+			return err
+	}
+	if result.MatchedCount == 0 {
+			return repository.ErrNotFound // Workout with that ID didn't exist
+	}
+	return nil
+}
+
+func (r *mongoWorkoutRepository) Delete(ctx context.Context, workoutID primitive.ObjectID, trainerID primitive.ObjectID) error {
+	if workoutID == primitive.NilObjectID || trainerID == primitive.NilObjectID {
+			return errors.New("workout ID and trainer ID are required for deletion")
+	}
+
+	// Filter ensures the workout exists AND belongs to the specified trainer.
+	filter := bson.M{
+			"_id":       workoutID,
+			"trainerId": trainerID,
+	}
+
+	result, err := r.collection.DeleteOne(ctx, filter)
+	if err != nil {
+			return err
+	}
+	if result.DeletedCount == 0 {
+			// Workout not found OR not owned by this trainer.
+			return repository.ErrNotFound
+	}
+	return nil
+}

@@ -362,3 +362,70 @@ func (h *ClientHandler) ConfirmUploadForAssignment(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment)) // Use existing mapper
 }
+
+// --- DTO for Logging Performance ---
+type LogPerformanceRequest struct {
+	AchievedSets          *int    `json:"achievedSets" binding:"omitempty,min=0"` // min=0 allows logging 0 sets
+	AchievedReps          *string `json:"achievedReps" binding:"omitempty"`
+	AchievedWeight        *string `json:"achievedWeight" binding:"omitempty"`
+	AchievedDuration      *string `json:"achievedDuration" binding:"omitempty"`
+	ClientPerformanceNotes *string `json:"clientPerformanceNotes" binding:"omitempty"` // Changed to *string to match domain
+	// Status string `json:"status,omitempty"` // Optionally allow client to update status while logging
+}
+
+// LogPerformanceForMyAssignment godoc
+// @Summary Log performance for an assignment
+// @Description Allows a client to log their achieved sets, reps, weight, etc., for an assignment.
+// @Tags Client Assignments
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param assignmentId path string true "Assignment's ObjectID Hex"
+// @Param performanceRequest body LogPerformanceRequest true "Achieved performance data"
+// @Success 200 {object} AssignmentResponse "Performance logged successfully"
+// @Failure 400 {object} gin.H "Invalid input"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (assignment not for this client)"
+// @Failure 404 {object} gin.H "Assignment not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /client/assignments/{assignmentId}/performance [patch]
+func (h *ClientHandler) LogPerformanceForMyAssignment(c *gin.Context) {
+	clientIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	clientID, _ := primitive.ObjectIDFromHex(clientIDStr)
+
+	assignmentIDHex := c.Param("assignmentId")
+	assignmentID, err := primitive.ObjectIDFromHex(assignmentIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid assignment ID."); return }
+
+	var req LogPerformanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+			abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error())
+			return
+	}
+
+	// Construct domain.Assignment with only the fields being updated by performance logging
+	performanceData := domain.Assignment{
+			AchievedSets:          req.AchievedSets,
+			AchievedReps:          req.AchievedReps,
+			AchievedWeight:        req.AchievedWeight,
+			AchievedDuration:      req.AchievedDuration,
+			ClientPerformanceNotes: req.ClientPerformanceNotes,
+			// If status is part of this request:
+			// Status: domain.AssignmentStatus(req.Status),
+	}
+
+	updatedAssignment, err := h.clientService.LogPerformanceForMyAssignment(c.Request.Context(), clientID, assignmentID, performanceData)
+	if err != nil {
+			// Map service errors appropriately
+			if errors.Is(err, service.ErrAssignmentNotFound) || errors.Is(err, service.ErrWorkoutNotFound) {
+					 abortWithError(c, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, service.ErrAssignmentNotBelongToClient) {
+					 abortWithError(c, http.StatusForbidden, err.Error())
+			} else {
+					 abortWithError(c, http.StatusInternalServerError, "Failed to log performance.")
+			}
+			return
+	}
+	c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment)) // Reuse existing mapper
+}

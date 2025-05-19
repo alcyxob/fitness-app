@@ -48,8 +48,8 @@ type AssignmentRepository interface {
 	Create(ctx context.Context, assignment *domain.Assignment) (primitive.ObjectID, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Assignment, error)
 	GetByWorkoutID(ctx context.Context, workoutID primitive.ObjectID) ([]domain.Assignment, error) // <<< ADD/VERIFY THIS
-	// ... (other methods like GetByClientID, GetByTrainerID might be obsolete or need rework)
 	Update(ctx context.Context, assignment *domain.Assignment) error
+	Delete(ctx context.Context, assignmentID primitive.ObjectID, workoutID primitive.ObjectID) error 
 }
 
 // UploadRepository defines the interface for interacting with upload metadata.
@@ -65,7 +65,9 @@ type TrainingPlanRepository interface {
 	Create(ctx context.Context, plan *domain.TrainingPlan) (primitive.ObjectID, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.TrainingPlan, error)
 	GetByClientAndTrainerID(ctx context.Context, clientID, trainerID primitive.ObjectID) ([]domain.TrainingPlan, error)
-	// TODO: Add Update, Delete, maybe GetActivePlanForClient methods later if needed
+	Update(ctx context.Context, plan *domain.TrainingPlan) error
+	DeactivateOtherPlansForClient(ctx context.Context, clientID, trainerID primitive.ObjectID, excludePlanID primitive.ObjectID) error // For isActive logic
+	Delete(ctx context.Context, planID primitive.ObjectID, trainerID primitive.ObjectID) error
 }
 
 // WorkoutRepository defines the interface for interacting with workout data.
@@ -73,5 +75,6 @@ type WorkoutRepository interface {
 	Create(ctx context.Context, workout *domain.Workout) (primitive.ObjectID, error)
 	GetByID(ctx context.Context, id primitive.ObjectID) (*domain.Workout, error)
 	GetByPlanID(ctx context.Context, planID primitive.ObjectID) ([]domain.Workout, error) // Get all workouts for a plan
-	// TODO: Add Update, Delete methods later if needed
+	Update(ctx context.Context, workout *domain.Workout) error // <<< ADD THIS
+	Delete(ctx context.Context, workoutID primitive.ObjectID, trainerID primitive.ObjectID) error 
 }

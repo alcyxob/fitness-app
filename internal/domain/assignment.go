@@ -33,6 +33,13 @@ type Assignment struct {
 	Sequence       int     `bson:"sequence"`                                         // Order of exercise within the workout
 	TrainerNotes   string  `bson:"trainerNotes,omitempty" json:"trainerNotes,omitempty"` // Specific notes for this exercise assignment
 
+	// --- Client Achieved Performance Fields ---
+	AchievedSets          *int    `bson:"achievedSets,omitempty" json:"achievedSets,omitempty"`
+	AchievedReps          *string `bson:"achievedReps,omitempty" json:"achievedReps,omitempty"`
+	AchievedWeight        *string `bson:"achievedWeight,omitempty" json:"achievedWeight,omitempty"`
+	AchievedDuration      *string `bson:"achievedDuration,omitempty" json:"achievedDuration,omitempty"`
+	ClientPerformanceNotes *string `bson:"clientPerformanceNotes,omitempty" json:"clientPerformanceNotes,omitempty"` // Made this a pointer too for consistency
+
     // --- Client Tracking Fields ---
 	AssignedAt     time.Time          `bson:"assignedAt" json:"assignedAt"` // When this specific assignment was configured
 	Status         AssignmentStatus   `bson:"status" json:"status"`

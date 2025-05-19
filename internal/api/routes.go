@@ -69,6 +69,10 @@ func SetupRoutes(
 			// If clients need access, they'd likely use it via their assignments.
 			exerciseGroup.GET("", RoleMiddleware(domain.RoleTrainer), exerciseHandler.GetTrainerExercises)
 
+			exerciseGroup.GET("/:id", exerciseHandler.GetExerciseByID) // For fetching a single exercise
+			exerciseGroup.PUT("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.UpdateExercise)
+			exerciseGroup.DELETE("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.DeleteExercise)
+
 			// TODO: Add routes for specific exercise actions
 			// exerciseGroup.GET("/:id", exerciseHandler.GetExerciseByID)
 			// exerciseGroup.PUT("/:id", RoleMiddleware(domain.RoleTrainer), exerciseHandler.UpdateExercise)
@@ -110,10 +114,16 @@ func SetupRoutes(
 
 			// PATCH /api/v1/trainer/assignments/{assignmentId}/feedback
 			trainerApiGroup.PATCH("/assignments/:assignmentId/feedback", trainerHandler.SubmitFeedbackForAssignment)
-			
-			// TODO: GET /api/v1/trainer/workouts/{workoutId}/assignments
-			// TODO: GET /api/v1/trainer/assignments/{assignmentId} // For feedback maybe?
-			// TODO: POST /api/v1/trainer/assignments/:assignmentId/feedback (calls trainerHandler.SubmitFeedback)
+
+			trainerApiGroup.PUT("/clients/:clientId/plans/:planId", trainerHandler.UpdateTrainingPlan)
+
+			trainerApiGroup.DELETE("/clients/:clientId/plans/:planId", trainerHandler.DeleteTrainingPlan)
+
+			trainerApiGroup.PUT("/plans/:planId/workouts/:workoutId", trainerHandler.UpdateWorkout)
+			trainerApiGroup.DELETE("/plans/:planId/workouts/:workoutId", trainerHandler.DeleteWorkout)
+
+			trainerApiGroup.PUT("/workouts/:workoutId/assignments/:assignmentId", trainerHandler.UpdateAssignmentInWorkout)
+			trainerApiGroup.DELETE("/workouts/:workoutId/assignments/:assignmentId", trainerHandler.DeleteAssignmentFromWorkout)
 		}
 
 		clientApiGroup := protected.Group("/client")
@@ -130,9 +140,12 @@ func SetupRoutes(
 
 			clientApiGroup.PATCH("/assignments/:assignmentId/status", clientHandler.UpdateMyAssignmentStatus)
 			
-			// --- NEW Routes for Upload Process ---
+			// --- Routes for Upload Process ---
 			clientApiGroup.POST("/assignments/:assignmentId/upload-url", clientHandler.RequestUploadURLForAssignment)
 			clientApiGroup.POST("/assignments/:assignmentId/upload-confirm", clientHandler.ConfirmUploadForAssignment)
+
+			// --- NEW Route for Logging Performance ---
+			clientApiGroup.PATCH("/assignments/:assignmentId/performance", clientHandler.LogPerformanceForMyAssignment)
 		}
 	}
 }

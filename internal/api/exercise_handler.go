@@ -181,8 +181,6 @@ func (h *ExerciseHandler) GetTrainerExercises(c *gin.Context) {
 }
 
 // TODO: Implement other handlers:
-// UpdateExercise(c *gin.Context)
-// DeleteExercise(c *gin.Context)
 
 // GetExerciseByID godoc
 // @Summary Get a specific exercise by ID
@@ -218,4 +216,117 @@ func (h *ExerciseHandler) GetExerciseByID(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, MapExerciseToResponse(exercise))
+}
+
+
+// UpdateExercise godoc
+// @Summary Update an existing exercise
+// @Description Updates details of an exercise owned by the authenticated trainer.
+// @Tags Exercises
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Exercise ObjectID Hex"
+// @Param exercise body CreateExerciseRequest true "Updated exercise details"
+// @Success 200 {object} ExerciseResponse "Exercise updated successfully"
+// @Failure 400 {object} gin.H "Invalid input (validation error, invalid ID)"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or does not own the exercise)"
+// @Failure 404 {object} gin.H "Exercise not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /exercises/{id} [put]
+func (h *ExerciseHandler) UpdateExercise(c *gin.Context) {
+	exerciseIDHex := c.Param("id")
+	exerciseID, err := primitive.ObjectIDFromHex(exerciseIDHex)
+	if err != nil {
+		abortWithError(c, http.StatusBadRequest, "Invalid exercise ID format.")
+		return
+	}
+
+	var req CreateExerciseRequest // Reusing Create DTO
+	if err := c.ShouldBindJSON(&req); err != nil {
+		abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error())
+		return
+	}
+
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil {
+		abortWithError(c, http.StatusUnauthorized, "Unable to identify trainer.")
+		return
+	}
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr) // Assume valid if token good
+
+	updatedExercise, err := h.exerciseService.UpdateExercise(
+		c.Request.Context(),
+		trainerID,
+		exerciseID,
+		req.Name,
+		req.Description,
+		req.MuscleGroup,
+		req.ExecutionTechnic,
+		req.Applicability,
+		req.Difficulty,
+		req.VideoURL,
+	)
+	if err != nil {
+		if errors.Is(err, service.ErrExerciseNotFound) {
+			abortWithError(c, http.StatusNotFound, err.Error())
+		} else if errors.Is(err, service.ErrExerciseAccessDenied) {
+			abortWithError(c, http.StatusForbidden, err.Error())
+		} else if errors.Is(err, service.ErrValidationFailed) {
+			abortWithError(c, http.StatusBadRequest, err.Error())
+		} else {
+			// log.Printf("Error updating exercise %s: %v", exerciseIDHex, err)
+			abortWithError(c, http.StatusInternalServerError, "Failed to update exercise.")
+		}
+		return
+	}
+	c.JSON(http.StatusOK, MapExerciseToResponse(updatedExercise))
+}
+
+
+// DeleteExercise godoc
+// @Summary Delete an exercise
+// @Description Deletes an exercise owned by the authenticated trainer.
+// @Tags Exercises
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "Exercise ObjectID Hex"
+// @Success 200 {object} gin.H "message: Exercise deleted successfully" // Or 204 No Content
+// @Failure 400 {object} gin.H "Invalid ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or does not own the exercise)"
+// @Failure 404 {object} gin.H "Exercise not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /exercises/{id} [delete]
+func (h *ExerciseHandler) DeleteExercise(c *gin.Context) {
+	exerciseIDHex := c.Param("id")
+	exerciseID, err := primitive.ObjectIDFromHex(exerciseIDHex)
+	if err != nil {
+		abortWithError(c, http.StatusBadRequest, "Invalid exercise ID format.")
+		return
+	}
+
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil {
+		abortWithError(c, http.StatusUnauthorized, "Unable to identify trainer.")
+		return
+	}
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr) // Assume valid
+
+	err = h.exerciseService.DeleteExercise(c.Request.Context(), trainerID, exerciseID)
+	if err != nil {
+		if errors.Is(err, service.ErrExerciseNotFound) { // Service maps repo's ErrNotFound
+			abortWithError(c, http.StatusNotFound, "Exercise not found or access denied.")
+		} else if errors.Is(err, service.ErrExerciseAccessDenied) { // If service distinguishes
+            abortWithError(c, http.StatusForbidden, err.Error())
+        } else {
+			// log.Printf("Error deleting exercise %s: %v", exerciseIDHex, err)
+			abortWithError(c, http.StatusInternalServerError, "Failed to delete exercise.")
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Exercise deleted successfully"})
+	// Alternatively, return http.StatusNoContent with no body:
+	// c.Status(http.StatusNoContent)
 }

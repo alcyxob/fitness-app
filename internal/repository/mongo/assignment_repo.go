@@ -126,55 +126,56 @@ func (r *mongoAssignmentRepository) GetByTrainerID(ctx context.Context, trainerI
 // Be cautious when using this; specific update methods (like UpdateStatus) might be safer.
 func (r *mongoAssignmentRepository) Update(ctx context.Context, assignment *domain.Assignment) error {
 	if assignment.ID == primitive.NilObjectID {
-		return errors.New("assignment ID is required for update")
+			return errors.New("assignment ID is required for update")
 	}
 
 	filter := bson.M{"_id": assignment.ID}
+	// WorkoutID should not change via this update.
+	// ExerciseID *could* change if trainer wants to swap exercise for this slot.
+	setDoc := bson.M{
+			"$set": bson.M{
+					"exerciseId":   assignment.ExerciseID, // Allow updating linked exercise
+					"sets":         assignment.Sets,
+					"reps":         assignment.Reps,
+					"rest":         assignment.Rest,
+					"tempo":        assignment.Tempo,
+					"weight":       assignment.Weight,
+					"duration":     assignment.Duration,
+					"sequence":     assignment.Sequence,
+					"trainerNotes": assignment.TrainerNotes,
+					"status":       assignment.Status,       // Trainer might adjust status via edit too
+					"clientNotes":  assignment.ClientNotes,  // Usually client sets this, but for completeness
+					"uploadId":     assignment.UploadID,     // Can be set/cleared
+					"feedback":     assignment.Feedback,
+					"achievedSets":          assignment.AchievedSets,
+					"achievedReps":          assignment.AchievedReps,
+					"achievedWeight":        assignment.AchievedWeight,
+					"achievedDuration":      assignment.AchievedDuration,
+					"clientPerformanceNotes": assignment.ClientPerformanceNotes,
+					"updatedAt":    time.Now().UTC(),
+			},
+	}
+	// If any optional fields are nil and you want to $unset them from MongoDB:
+    // If you want to explicitly remove fields from MongoDB document if their Go pointer is nil:
+    unsetDoc := bson.M{}
+    if assignment.Sets == nil { unsetDoc["sets"] = "" } // Example, repeat for all relevant pointers
+    if assignment.AchievedSets == nil { unsetDoc["achievedSets"] = "" }
+		if assignment.Reps == nil { unsetDoc["reps"] = "" }
+		if assignment.Rest == nil { unsetDoc["rest"] = "" }
+		if assignment.Tempo == nil { unsetDoc["tempo"] = "" }
+		if assignment.Weight == nil { unsetDoc["weight"] = "" }
+		if assignment.Duration == nil { unsetDoc["duration"] = "" }
+		if assignment.AchievedReps == nil { unsetDoc["achievedReps"] = "" }
+			
 
-	// Construct the update document carefully
-	// Only include fields that should actually be updatable on an Assignment itself
-	updateFields := bson.M{
-		"status":       assignment.Status,
-		"clientNotes":  assignment.ClientNotes,
-		"feedback":     assignment.Feedback,
-		"updatedAt":    time.Now().UTC(), // Always update the timestamp
-        "sets":         assignment.Sets, // Assuming these can be updated
-        "reps":         assignment.Reps,
-        "rest":         assignment.Rest,
-        "tempo":        assignment.Tempo,
-        "weight":       assignment.Weight,
-        "duration":     assignment.Duration,
-        "sequence":     assignment.Sequence,
-        "trainerNotes": assignment.TrainerNotes,
+	updateParts := bson.M{"$set": setDoc}
+	if len(unsetDoc) > 0 {
+			updateParts["$unset"] = unsetDoc
 	}
 
-    // Handle optional UploadID correctly
-	if assignment.UploadID != nil {
-        // If UploadID is being explicitly set (even to NilObjectID to unset?)
-        if *assignment.UploadID == primitive.NilObjectID {
-             // If we need to unset the field in MongoDB
-            // updateFields["$unset"] = bson.M{"uploadId": ""} // Requires restructure of update
-        } else {
-		    updateFields["uploadId"] = *assignment.UploadID
-        }
-	} // If assignment.UploadID is nil in the input struct, we simply don't include it in $set
-
-
-    // REMOVED Handling for DueDate
-	// if assignment.DueDate != nil { ... }
-
-
-	update := bson.M{"$set": updateFields}
-    // If you implemented $unset logic for uploadId, merge the $unset map into the update doc
-
-	result, err := r.collection.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return err
-	}
-
-	if result.MatchedCount == 0 {
-		return repository.ErrNotFound
-	}
+	result, err := r.collection.UpdateOne(ctx, filter, updateParts)
+	if err != nil { return err }
+	if result.MatchedCount == 0 { return repository.ErrNotFound }
 	return nil
 }
 
@@ -257,4 +258,25 @@ func (r *mongoAssignmentRepository) GetByWorkoutID(ctx context.Context, workoutI
 			return nil, err
 	}
 	return assignments, nil
+}
+
+func (r *mongoAssignmentRepository) Delete(ctx context.Context, assignmentID primitive.ObjectID, workoutID primitive.ObjectID) error {
+	if assignmentID == primitive.NilObjectID || workoutID == primitive.NilObjectID {
+			return errors.New("assignment ID and workout ID are required for deletion")
+	}
+
+	// Filter ensures the assignment exists AND belongs to the specified workout.
+	// Ownership by trainer is handled at the service layer by checking workout ownership.
+	filter := bson.M{
+			"_id":       assignmentID,
+			"workoutId": workoutID,
+	}
+
+	result, err := r.collection.DeleteOne(ctx, filter)
+	if err != nil { return err }
+	if result.DeletedCount == 0 {
+			// Assignment not found OR not part of the specified workout.
+			return repository.ErrNotFound
+	}
+	return nil
 }

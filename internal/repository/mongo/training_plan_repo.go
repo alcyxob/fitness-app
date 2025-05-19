@@ -119,3 +119,72 @@ func EnsureTrainingPlanIndexes(ctx context.Context, collection *mongo.Collection
 		// log.Printf("WARN: Failed to create indexes for collection %s: %v", collection.Name(), err)
 	}
 }
+
+func (r *mongoTrainingPlanRepository) Update(ctx context.Context, plan *domain.TrainingPlan) error {
+    if plan.ID == primitive.NilObjectID {
+        return errors.New("training plan ID is required for update")
+    }
+
+    filter := bson.M{"_id": plan.ID}
+    // Construct update document carefully, only setting fields that should be updatable.
+    // TrainerID and ClientID should generally not be changed by a simple plan update.
+    // CreatedAt should not be changed.
+    updateDoc := bson.M{
+        "$set": bson.M{
+            "name":        plan.Name,
+            "description": plan.Description,
+            "startDate":   plan.StartDate, // Pass pointer directly
+            "endDate":     plan.EndDate,   // Pass pointer directly
+            "isActive":    plan.IsActive,
+            "updatedAt":   time.Now().UTC(), // Always update this
+        },
+    }
+
+    result, err := r.collection.UpdateOne(ctx, filter, updateDoc)
+    if err != nil {
+        return err
+    }
+    if result.MatchedCount == 0 {
+        return repository.ErrNotFound // Plan with that ID didn't exist
+    }
+    // result.ModifiedCount could be 0 if data was the same, which is not an error.
+    return nil
+}
+
+// Implement DeactivateOtherPlansForClient if strict single active plan is needed
+func (r *mongoTrainingPlanRepository) DeactivateOtherPlansForClient(ctx context.Context, clientID, trainerID, excludePlanID primitive.ObjectID) error {
+    filter := bson.M{
+        "clientId":  clientID,
+        "trainerId": trainerID,
+        "isActive":  true,
+        "_id":       bson.M{"$ne": excludePlanID}, // Don't deactivate the plan we're trying to activate
+    }
+    update := bson.M{"$set": bson.M{"isActive": false, "updatedAt": time.Now().UTC()}}
+    _, err := r.collection.UpdateMany(ctx, filter, update)
+    return err
+}
+
+func (r *mongoTrainingPlanRepository) Delete(ctx context.Context, planID primitive.ObjectID, trainerID primitive.ObjectID) error {
+    if planID == primitive.NilObjectID || trainerID == primitive.NilObjectID {
+        return errors.New("plan ID and trainer ID are required for deletion")
+    }
+
+    // Filter ensures that the plan exists AND belongs to the specified trainer.
+    filter := bson.M{
+        "_id":       planID,
+        "trainerId": trainerID,
+    }
+
+    result, err := r.collection.DeleteOne(ctx, filter)
+    if err != nil {
+        return err // Database error
+    }
+
+    if result.DeletedCount == 0 {
+        // This means either the plan didn't exist, or it didn't belong to this trainer.
+        // The service layer might have already checked existence via GetByID,
+        // so this often implies an ownership mismatch if GetByID succeeded.
+        return repository.ErrNotFound // Or a more specific "delete failed / not authorized"
+    }
+    return nil
+}

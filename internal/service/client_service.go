@@ -59,6 +59,7 @@ type ClientService interface {
 	GetWorkoutsForMyPlan(ctx context.Context, clientID, planID primitive.ObjectID) ([]domain.Workout, error)
 	GetAssignmentsForMyWorkout(ctx context.Context, clientID, workoutID primitive.ObjectID) ([]domain.Assignment, error)
 	UpdateMyAssignmentStatus(ctx context.Context, clientID, assignmentID primitive.ObjectID, newStatus domain.AssignmentStatus) (*domain.Assignment, error)
+	LogPerformanceForMyAssignment(ctx context.Context, clientID, assignmentID primitive.ObjectID, performanceData domain.Assignment) (*domain.Assignment, error)
 }
 
 // --- Service Implementation ---
@@ -445,5 +446,64 @@ func (s *clientService) UpdateMyAssignmentStatus(ctx context.Context, clientID, 
 	// For simplicity, we return the modified local 'assignment' object.
 	// To be fully robust, fetch it again:
 	// return s.assignmentRepo.GetByID(ctx, assignmentID)
+	return assignment, nil
+}
+
+func (s *clientService) LogPerformanceForMyAssignment(ctx context.Context, clientID, assignmentID primitive.ObjectID, performanceData domain.Assignment) (*domain.Assignment, error) {
+	if clientID == primitive.NilObjectID || assignmentID == primitive.NilObjectID {
+			return nil, errors.New("client ID and assignment ID are required")
+	}
+
+	// 1. Get the existing assignment
+	assignment, err := s.assignmentRepo.GetByID(ctx, assignmentID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) { return nil, ErrAssignmentNotFound }
+			return nil, err
+	}
+
+	// 2. Authorization: Verify assignment belongs to this client (via workout)
+	workout, err := s.workoutRepo.GetByID(ctx, assignment.WorkoutID)
+	if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+					// log.Printf("Data inconsistency: Workout %s not found for assignment %s", assignment.WorkoutID.Hex(), assignmentID.Hex())
+					return nil, ErrWorkoutNotFound
+			}
+			return nil, errors.New("failed to verify workout for performance logging")
+	}
+	if workout.ClientID != clientID {
+			return nil, ErrAssignmentNotBelongToClient
+	}
+
+	// 3. Update only the performance-related fields on the fetched assignment object
+	// The 'performanceData' struct only carries the fields being updated.
+	assignment.AchievedSets = performanceData.AchievedSets
+	assignment.AchievedReps = performanceData.AchievedReps
+	assignment.AchievedWeight = performanceData.AchievedWeight
+	assignment.AchievedDuration = performanceData.AchievedDuration
+	assignment.ClientPerformanceNotes = performanceData.ClientPerformanceNotes
+
+	// 4. Optionally, update status here too.
+	// For example, if logging performance implies it's at least "completed".
+	// Or client might have already marked it "completed" and is now adding details.
+	if assignment.Status == domain.StatusAssigned { // If it was just assigned, now it's at least completed
+			 assignment.Status = domain.StatusCompleted
+	}
+	// If they log performance for an already "submitted" or "reviewed" item,
+	// should the status change? Probably not unless explicitly requested.
+	// For now, let's not change status if it's beyond "assigned".
+
+	assignment.UpdatedAt = time.Now().UTC()
+
+	// 5. Save changes
+	err = s.assignmentRepo.Update(ctx, assignment)
+	if err != nil {
+			// log.Printf("Error saving performance log for assignment %s: %v", assignmentID.Hex(), err)
+			return nil, errors.New("failed to log performance")
+	}
+	
+	// Return the fully updated assignment.
+	// The local 'assignment' object has been modified and then saved.
+	// assignmentRepo.Update does not return the object, so if we want the absolute latest from DB (e.g. _rev field if using Couch/Pouch)
+	// we would refetch. For Mongo, returning the modified local object is usually fine.
 	return assignment, nil
 }

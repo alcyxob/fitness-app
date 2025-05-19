@@ -906,3 +906,378 @@ func (h *TrainerHandler) SubmitFeedbackForAssignment(c *gin.Context) {
 
     c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment))
 }
+
+// UpdateTrainingPlan godoc
+// @Summary Update an existing training plan
+// @Description Updates details of a training plan for a specific client owned by the trainer.
+// @Tags Trainer Plans
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param clientId path string true "Client's ObjectID Hex"
+// @Param planId path string true "Training Plan's ObjectID Hex to update"
+// @Param planRequest body CreateTrainingPlanRequest true "Updated Training Plan details" // Reusing DTO
+// @Success 200 {object} TrainingPlanResponse "Training plan updated successfully"
+// @Failure 400 {object} gin.H "Invalid input (validation error, invalid IDs)"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or client/plan not owned)"
+// @Failure 404 {object} gin.H "Training Plan or Client not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/clients/{clientId}/plans/{planId} [put]
+func (h *TrainerHandler) UpdateTrainingPlan(c *gin.Context) {
+    // Get IDs from path
+    clientIDHex := c.Param("clientId") // We need clientID for context, service will verify consistency
+    clientID, err := primitive.ObjectIDFromHex(clientIDHex)
+    if err != nil {
+        abortWithError(c, http.StatusBadRequest, "Invalid client ID format in URL path.")
+        return
+    }
+
+    planIDHex := c.Param("planId")
+    planID, err := primitive.ObjectIDFromHex(planIDHex)
+    if err != nil {
+        abortWithError(c, http.StatusBadRequest, "Invalid training plan ID format in URL path.")
+        return
+    }
+
+    // Bind request body
+    var req CreateTrainingPlanRequest // Reusing the create DTO
+    if err := c.ShouldBindJSON(&req); err != nil {
+        abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error())
+        return
+    }
+
+    // Get trainer ID from token
+    trainerIDStr, err := getUserIDFromContext(c)
+    if err != nil { /* ... handle unauthorized ... */ }
+    trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+    // Construct the updates domain object
+    updates := domain.TrainingPlan{
+        // ID and TrainerID are for lookup/auth, ClientID for consistency check
+        ID:        planID,    // Not strictly needed by service for update, but good for clarity
+        TrainerID: trainerID, // For service auth check
+        ClientID:  clientID,  // For service consistency check
+        // Updatable fields from request:
+        Name:        req.Name,
+        Description: req.Description,
+        StartDate:   req.StartDate,
+        EndDate:     req.EndDate,
+        IsActive:    req.IsActive,
+    }
+
+    // Call service
+    updatedPlan, err := h.trainerService.UpdateTrainingPlan(c.Request.Context(), trainerID, planID, updates)
+    if err != nil {
+        // Map service errors
+        if errors.Is(err, service.ErrTrainingPlanNotFound) || errors.Is(err, service.ErrClientNotFound) {
+            abortWithError(c, http.StatusNotFound, err.Error())
+        } else if errors.Is(err, service.ErrTrainingPlanAccessDenied) || errors.Is(err, service.ErrClientNotManaged) || errors.Is(err, errors.New("cannot change the client associated with a training plan via update")) {
+            abortWithError(c, http.StatusForbidden, err.Error())
+        } else {
+            // log.Printf("Error updating training plan %s: %v", planIDHex, err)
+            abortWithError(c, http.StatusInternalServerError, "Failed to update training plan.")
+        }
+        return
+    }
+
+    c.JSON(http.StatusOK, MapTrainingPlanToResponse(updatedPlan))
+}
+
+// DeleteTrainingPlan godoc
+// @Summary Delete a training plan
+// @Description Deletes a training plan (and potentially its associated workouts/assignments) for a client.
+// @Tags Trainer Plans
+// @Produce json
+// @Security BearerAuth
+// @Param clientId path string true "Client's ObjectID Hex (for context/auth)"
+// @Param planId path string true "Training Plan's ObjectID Hex to delete"
+// @Success 200 {object} gin.H "message: Training plan deleted successfully" // Or 204 No Content
+// @Failure 400 {object} gin.H "Invalid ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or client/plan not owned)"
+// @Failure 404 {object} gin.H "Training Plan not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/clients/{clientId}/plans/{planId} [delete]
+func (h *TrainerHandler) DeleteTrainingPlan(c *gin.Context) {
+    // ClientID from path is for context and can be used for an extra auth check if service requires it
+    // clientIDHex := c.Param("clientId")
+    // _, err := primitive.ObjectIDFromHex(clientIDHex)
+    // if err != nil {
+    //     abortWithError(c, http.StatusBadRequest, "Invalid client ID format in URL path.")
+    //     return
+    // }
+
+    planIDHex := c.Param("planId")
+    planID, err := primitive.ObjectIDFromHex(planIDHex)
+    if err != nil {
+        abortWithError(c, http.StatusBadRequest, "Invalid training plan ID format.")
+        return
+    }
+
+    trainerIDStr, err := getUserIDFromContext(c)
+    if err != nil { /* ... handle unauthorized ... */ }
+    trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+    err = h.trainerService.DeleteTrainingPlan(c.Request.Context(), trainerID, planID)
+    if err != nil {
+        if errors.Is(err, service.ErrTrainingPlanNotFound) || errors.Is(err, service.ErrTrainingPlanAccessDenied) {
+            // Service combines "not found" and "not owned" for delete
+            abortWithError(c, http.StatusForbidden, "Training plan not found or access denied.")
+        } else {
+            // log.Printf("Error deleting training plan %s: %v", planIDHex, err)
+            abortWithError(c, http.StatusInternalServerError, "Failed to delete training plan.")
+        }
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "Training plan deleted successfully"})
+    // Or c.Status(http.StatusNoContent)
+}
+
+// UpdateWorkout godoc
+// @Summary Update an existing workout within a plan
+// @Description Updates details of a workout in a specific plan owned by the trainer.
+// @Tags Trainer Workouts
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param planId path string true "Training Plan's ObjectID Hex"
+// @Param workoutId path string true "Workout's ObjectID Hex to update"
+// @Param workoutRequest body CreateWorkoutRequest true "Updated Workout details"
+// @Success 200 {object} WorkoutResponse "Workout updated successfully"
+// @Failure 400 {object} gin.H "Invalid input (validation error, invalid IDs)"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or does not own plan/workout)"
+// @Failure 404 {object} gin.H "Training Plan or Workout not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/plans/{planId}/workouts/{workoutId} [put]
+func (h *TrainerHandler) UpdateWorkout(c *gin.Context) {
+	// Get IDs from path
+	planIDHex := c.Param("planId")
+	planID, err := primitive.ObjectIDFromHex(planIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid plan ID."); return }
+
+	workoutIDHex := c.Param("workoutId")
+	workoutID, err := primitive.ObjectIDFromHex(workoutIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid workout ID."); return }
+
+	// Bind request body
+	var req CreateWorkoutRequest // Reusing DTO
+	if err := c.ShouldBindJSON(&req); err != nil {
+			abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error()); return
+	}
+
+	// Get trainer ID from token
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+	// Construct updates domain object
+	// Ensure req.Sequence (which is *int) is handled correctly
+	var sequenceVal int
+	if req.Sequence == nil { // If using *int in DTO
+			// If sequence is truly optional for update, how to handle?
+			// For now, assume it MUST be provided for an update via DTO validation
+			// If CreateWorkoutRequest.Sequence is int, this check is not needed.
+			// Let's assume CreateWorkoutRequest.Sequence is *int and required.
+			abortWithError(c, http.StatusBadRequest, "Sequence is required for update."); return
+	}
+	sequenceVal = *req.Sequence
+
+
+	updates := domain.Workout{
+			// IDs are for service layer lookup/auth
+			Name:      req.Name,
+			DayOfWeek: req.DayOfWeek,
+			Notes:     req.Notes,
+			Sequence:  sequenceVal,
+	}
+
+	updatedWorkout, err := h.trainerService.UpdateWorkout(c.Request.Context(), trainerID, planID, workoutID, updates)
+	if err != nil {
+			// Map service errors
+			if errors.Is(err, service.ErrWorkoutNotFound) || errors.Is(err, service.ErrTrainingPlanNotFound) {
+					abortWithError(c, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, service.ErrTrainingPlanAccessDenied) || errors.Is(err, errors.New("access denied: trainer does not own this workout")) { // Crude check
+					abortWithError(c, http.StatusForbidden, err.Error())
+			} else {
+					abortWithError(c, http.StatusInternalServerError, "Failed to update workout.")
+			}
+			return
+	}
+	c.JSON(http.StatusOK, MapWorkoutToResponse(updatedWorkout))
+}
+
+
+// DeleteWorkout godoc
+// @Summary Delete a workout from a plan
+// @Description Deletes a workout (and potentially its assignments) from a specific plan.
+// @Tags Trainer Workouts
+// @Produce json
+// @Security BearerAuth
+// @Param planId path string true "Training Plan's ObjectID Hex"
+// @Param workoutId path string true "Workout's ObjectID Hex to delete"
+// @Success 200 {object} gin.H "message: Workout deleted successfully" // Or 204 No Content
+// @Failure 400 {object} gin.H "Invalid ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden (not a trainer, or does not own plan/workout)"
+// @Failure 404 {object} gin.H "Workout not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/plans/{planId}/workouts/{workoutId} [delete]
+func (h *TrainerHandler) DeleteWorkout(c *gin.Context) {
+	planIDHex := c.Param("planId")
+	planID, err := primitive.ObjectIDFromHex(planIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid plan ID."); return }
+
+	workoutIDHex := c.Param("workoutId")
+	workoutID, err := primitive.ObjectIDFromHex(workoutIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid workout ID."); return }
+
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+	err = h.trainerService.DeleteWorkout(c.Request.Context(), trainerID, planID, workoutID)
+	if err != nil {
+			if errors.Is(err, service.ErrWorkoutNotFound) || errors.Is(err, errors.New("access denied: trainer does not own this workout")) { // Crude
+					abortWithError(c, http.StatusForbidden, "Workout not found or access denied.")
+			} else if errors.Is(err, service.ErrTrainingPlanAccessDenied){
+					abortWithError(c, http.StatusForbidden, err.Error())
+			} else {
+					abortWithError(c, http.StatusInternalServerError, "Failed to delete workout.")
+			}
+			return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Workout deleted successfully"})
+	// Or c.Status(http.StatusNoContent)
+}
+
+
+// UpdateAssignmentInWorkout godoc
+// @Summary Update an existing exercise assignment within a workout
+// @Description Updates parameters (sets, reps, notes, etc.) of an exercise assigned to a workout.
+// @Tags Trainer Workouts
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param workoutId path string true "Workout's ObjectID Hex"
+// @Param assignmentId path string true "Assignment's ObjectID Hex to update"
+// @Param assignmentRequest body AssignExerciseToWorkoutRequest true "Updated assignment details"
+// @Success 200 {object} AssignmentResponse "Assignment updated successfully"
+// @Failure 400 {object} gin.H "Invalid input"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden"
+// @Failure 404 {object} gin.H "Workout, Assignment, or Exercise not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/workouts/{workoutId}/assignments/{assignmentId} [put]
+func (h *TrainerHandler) UpdateAssignmentInWorkout(c *gin.Context) {
+	workoutIDHex := c.Param("workoutId")
+	workoutID, err := primitive.ObjectIDFromHex(workoutIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid workout ID."); return }
+
+	assignmentIDHex := c.Param("assignmentId")
+	assignmentID, err := primitive.ObjectIDFromHex(assignmentIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid assignment ID."); return }
+
+	var req AssignExerciseToWorkoutRequest // Reusing DTO
+	if err := c.ShouldBindJSON(&req); err != nil {
+			abortWithError(c, http.StatusBadRequest, "Validation error: "+err.Error()); return
+	}
+
+	var sequenceVal int
+	if req.Sequence == nil {
+			// If "required" binding means "key must exist, value can be JSON null resulting in Go nil pointer",
+			// then this case might happen. If "required" also means "value must not be JSON null",
+			// then this nil check is more of a defensive measure or for when "required" is not used.
+			// Given the error usually comes from the "required" tag itself not liking 0 for non-pointers,
+			// let's assume if validation passes, req.Sequence is non-nil.
+			// However, to be safe if JSON could send "sequence": null and `required` allows it:
+			abortWithError(c, http.StatusBadRequest, "Validation error: Sequence is required but was null.")
+			return
+	}
+	sequenceVal = *req.Sequence
+
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+	// Convert ExerciseID from request string to ObjectID for the service
+	var exerciseID primitive.ObjectID
+	if req.ExerciseID != "" { // If exercise is being changed
+			exerciseID, err = primitive.ObjectIDFromHex(req.ExerciseID)
+			if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid new Exercise ID format."); return }
+	}
+	// If req.ExerciseID is empty, it means we are not changing the exercise,
+	// the service layer will use the existing one from the fetched assignment.
+
+	updates := domain.Assignment{
+			// Service layer will use existingAssignment.ID and existingAssignment.WorkoutID
+			ExerciseID:   exerciseID, // Pass the new one if provided, or NilObjectID
+			Sets:         req.Sets,
+			Reps:         req.Reps,
+			Rest:         req.Rest,
+			Tempo:        req.Tempo,
+			Weight:       req.Weight,
+			Duration:     req.Duration,
+			Sequence:     sequenceVal,
+			TrainerNotes: req.TrainerNotes,
+			// Other fields like Status, ClientNotes, UploadID, Feedback are typically
+			// not updated through this generic edit, but through specific flows.
+	}
+
+	updatedAssignment, err := h.trainerService.UpdateAssignmentInWorkout(c.Request.Context(), trainerID, workoutID, assignmentID, updates)
+	if err != nil {
+			// Map service errors appropriately (NotFound, Forbidden, etc.)
+			if errors.Is(err, service.ErrAssignmentNotFound) || errors.Is(err, service.ErrWorkoutNotFound) || errors.Is(err, service.ErrExerciseNotFound) {
+					 abortWithError(c, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, service.ErrAssignmentAccessDenied) || errors.Is(err, service.ErrExerciseAccessDenied) || errors.Is(err, errors.New("access denied: trainer does not own this workout")) {
+					 abortWithError(c, http.StatusForbidden, err.Error())
+			} else {
+					abortWithError(c, http.StatusInternalServerError, "Failed to update assignment.")
+			}
+			return
+	}
+	c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment))
+}
+
+
+// DeleteAssignmentFromWorkout godoc
+// @Summary Delete an exercise assignment from a workout
+// @Description Removes an exercise assignment from a specific workout.
+// @Tags Trainer Workouts
+// @Produce json
+// @Security BearerAuth
+// @Param workoutId path string true "Workout's ObjectID Hex"
+// @Param assignmentId path string true "Assignment's ObjectID Hex to delete"
+// @Success 200 {object} gin.H "message: Assignment deleted successfully" // Or 204
+// @Failure 400 {object} gin.H "Invalid ID format"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 403 {object} gin.H "Forbidden"
+// @Failure 404 {object} gin.H "Workout or Assignment not found"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /trainer/workouts/{workoutId}/assignments/{assignmentId} [delete]
+func (h *TrainerHandler) DeleteAssignmentFromWorkout(c *gin.Context) {
+	workoutIDHex := c.Param("workoutId")
+	workoutID, err := primitive.ObjectIDFromHex(workoutIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid workout ID."); return }
+
+	assignmentIDHex := c.Param("assignmentId")
+	assignmentID, err := primitive.ObjectIDFromHex(assignmentIDHex)
+	if err != nil { abortWithError(c, http.StatusBadRequest, "Invalid assignment ID."); return }
+
+	trainerIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	trainerID, _ := primitive.ObjectIDFromHex(trainerIDStr)
+
+	err = h.trainerService.DeleteAssignmentFromWorkout(c.Request.Context(), trainerID, workoutID, assignmentID)
+	if err != nil {
+			if errors.Is(err, service.ErrAssignmentNotFound) || errors.Is(err, service.ErrWorkoutNotFound) || errors.Is(err, service.ErrAssignmentAccessDenied) { // Assuming service maps this
+					 abortWithError(c, http.StatusForbidden, "Assignment not found or access denied.") // Or 404 for not found
+			} else {
+					abortWithError(c, http.StatusInternalServerError, "Failed to delete assignment.")
+			}
+			return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Assignment deleted successfully"})
+}

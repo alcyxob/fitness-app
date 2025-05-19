@@ -60,6 +60,8 @@ type ClientService interface {
 	GetAssignmentsForMyWorkout(ctx context.Context, clientID, workoutID primitive.ObjectID) ([]domain.Assignment, error)
 	UpdateMyAssignmentStatus(ctx context.Context, clientID, assignmentID primitive.ObjectID, newStatus domain.AssignmentStatus) (*domain.Assignment, error)
 	LogPerformanceForMyAssignment(ctx context.Context, clientID, assignmentID primitive.ObjectID, performanceData domain.Assignment) (*domain.Assignment, error)
+	// --- NEW: Get Current Workout(s) for Client ---
+	GetMyCurrentWorkouts(ctx context.Context, clientID primitive.ObjectID, targetDate time.Time) ([]domain.Workout, error)
 }
 
 // --- Service Implementation ---
@@ -506,4 +508,101 @@ func (s *clientService) LogPerformanceForMyAssignment(ctx context.Context, clien
 	// assignmentRepo.Update does not return the object, so if we want the absolute latest from DB (e.g. _rev field if using Couch/Pouch)
 	// we would refetch. For Mongo, returning the modified local object is usually fine.
 	return assignment, nil
+}
+
+// --- NEW Service Method Implementation ---
+func (s *clientService) GetMyCurrentWorkouts(ctx context.Context, clientID primitive.ObjectID, targetDate time.Time) ([]domain.Workout, error) {
+	if clientID == primitive.NilObjectID {
+			return nil, errors.New("client ID is required")
+	}
+
+	// 1. Find the client's active training plan(s).
+	//    For simplicity, assume only one plan can be "isActive: true" per client at a time.
+	//    If multiple, you'd need logic to pick the relevant one (e.g., based on targetDate falling within plan's Start/End).
+	
+	clientUser, err := s.userRepo.GetByID(ctx, clientID)
+	if err != nil { /* ... handle client not found ... */ return nil, ErrClientNotFound }
+	if clientUser.TrainerID == nil || *clientUser.TrainerID == primitive.NilObjectID {
+			return []domain.Workout{}, nil // No trainer, no trainer-assigned plans/workouts
+	}
+
+	allPlans, err := s.trainingPlanRepo.GetByClientAndTrainerID(ctx, clientID, *clientUser.TrainerID)
+	if err != nil {
+			// log.Printf("Error fetching plans for client %s to determine current workout: %v", clientID.Hex(), err)
+			return nil, errors.New("could not retrieve training plans")
+	}
+
+	var activePlan *domain.TrainingPlan
+	for i := range allPlans {
+			plan := allPlans[i] // Avoid G601: Implicit memory aliasing in for loop.
+			if plan.IsActive {
+					// Check if targetDate falls within this plan's StartDate and EndDate (if they exist)
+					if plan.StartDate != nil && targetDate.Before(*plan.StartDate) {
+							continue // Plan hasn't started yet
+					}
+					if plan.EndDate != nil && targetDate.After(*plan.EndDate) {
+							continue // Plan has ended
+					}
+					activePlan = &plan
+					break
+			}
+	}
+
+	if activePlan == nil {
+			// log.Printf("No active and current training plan found for client %s on %s", clientID.Hex(), targetDate.String())
+			return []domain.Workout{}, nil // No active plan for the target date
+	}
+
+	// 2. Fetch all workouts for the active plan.
+	workoutsInPlan, err := s.workoutRepo.GetByPlanID(ctx, activePlan.ID)
+	if err != nil {
+			// log.Printf("Error fetching workouts for active plan %s: %v", activePlan.ID.Hex(), err)
+			return nil, errors.New("could not retrieve workouts for the active plan")
+	}
+
+	if len(workoutsInPlan) == 0 {
+			return []domain.Workout{}, nil // Active plan has no workouts
+	}
+
+	// 3. Filter workouts for the targetDate.
+	var currentWorkouts []domain.Workout
+	targetWeekday := targetDate.Weekday() // Sunday = 0, Monday = 1, ..., Saturday = 6
+	
+	// Our domain.Workout.DayOfWeek: Optional: e.g., 1 (Mon) - 7 (Sun)
+	// We need to map time.Weekday to our DayOfWeek convention if they differ.
+	// Let's assume our DayOfWeek convention: 1=Monday, ..., 7=Sunday
+	
+	currentAppDayOfWeek := int(targetWeekday) // time.Monday = 1, time.Sunday = 0
+	if currentAppDayOfWeek == 0 { // If time.Weekday is Sunday (0)
+			currentAppDayOfWeek = 7   // Map to our 7 for Sunday
+	}
+	// Now currentAppDayOfWeek is 1 (Mon) to 7 (Sun)
+
+	for _, workout := range workoutsInPlan {
+			if workout.DayOfWeek != nil {
+					if *workout.DayOfWeek == currentAppDayOfWeek {
+							currentWorkouts = append(currentWorkouts, workout)
+					}
+			} else {
+					// If DayOfWeek is nil, how do we determine if it's for "today"?
+					// This part depends on your logic for plans without specific DayOfWeek on workouts.
+					// - Is it sequential based on plan StartDate and workout.Sequence?
+					// - For now, if DayOfWeek is nil, we'll assume it's not scheduled for a specific day.
+					//   A more complex logic would calculate:
+					//   daysIntoPlan = targetDate.Sub(*activePlan.StartDate).Hours() / 24
+					//   if int(daysIntoPlan) % len(workoutsInPlan) == workout.Sequence { currentWorkouts.append(workout) }
+					//   This assumes a strict rotation.
+					//
+					// Simpler: If a plan has no DayOfWeek workouts, maybe it shows the next in sequence?
+					// For now, only consider workouts with matching DayOfWeek.
+			}
+	}
+	
+	// Sort by sequence if multiple workouts are on the same day
+	// The repo already sorts by sequence, but if we combine from different logic, re-sort.
+	// sort.Slice(currentWorkouts, func(i, j int) bool {
+	//     return currentWorkouts[i].Sequence < currentWorkouts[j].Sequence
+	// })
+
+	return currentWorkouts, nil
 }

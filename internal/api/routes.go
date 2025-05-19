@@ -146,6 +146,7 @@ func SetupRoutes(
 
 			// --- NEW Route for Logging Performance ---
 			clientApiGroup.PATCH("/assignments/:assignmentId/performance", clientHandler.LogPerformanceForMyAssignment)
+			clientApiGroup.GET("/workouts/today", clientHandler.GetMyCurrentWorkouts)
 		}
 	}
 }

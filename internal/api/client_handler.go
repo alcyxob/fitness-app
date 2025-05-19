@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -428,4 +429,38 @@ func (h *ClientHandler) LogPerformanceForMyAssignment(c *gin.Context) {
 			return
 	}
 	c.JSON(http.StatusOK, MapAssignmentToResponse(updatedAssignment)) // Reuse existing mapper
+}
+
+// GetMyCurrentWorkouts godoc
+// @Summary Get my current workout(s) for today
+// @Description Retrieves the workout(s) scheduled for the authenticated client for the current day.
+// @Tags Client Workouts
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {array} WorkoutResponse "List of current workout(s) for today (can be empty)"
+// @Failure 401 {object} gin.H "Unauthorized"
+// @Failure 500 {object} gin.H "Internal Server Error"
+// @Router /client/workouts/today [get]
+func (h *ClientHandler) GetMyCurrentWorkouts(c *gin.Context) {
+	clientIDStr, err := getUserIDFromContext(c)
+	if err != nil { abortWithError(c, http.StatusUnauthorized, "Unauthorized."); return }
+	clientID, _ := primitive.ObjectIDFromHex(clientIDStr)
+
+	// Use current server date. Could also allow a 'date' query param for testing.
+	today := time.Now().UTC() // Or use a specific timezone relevant to your users
+
+	workouts, err := h.clientService.GetMyCurrentWorkouts(c.Request.Context(), clientID, today)
+	if err != nil {
+			// Handle specific errors from service if needed, e.g., client not found
+			// log.Printf("Error getting current workouts for client %s: %v", clientIDStr, err)
+			abortWithError(c, http.StatusInternalServerError, "Failed to retrieve current workout(s).")
+			return
+	}
+
+	// Service returns empty slice if no workouts for today, not an error.
+	if workouts == nil { // Should be an empty slice, not nil, from service
+			 c.JSON(http.StatusOK, []WorkoutResponse{})
+			 return
+	}
+	c.JSON(http.StatusOK, MapWorkoutsToResponse(workouts)) // Reuse existing mapper
 }

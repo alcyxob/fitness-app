@@ -47,61 +47,63 @@ type JWTConfig struct {
 
 // LoadConfig reads configuration from file or environment variables.
 func LoadConfig(path string) (config Config, err error) {
-	// Set the path to look for the config file in
-	viper.AddConfigPath(path)
-	// Set the name of the config file (without extension)
 	viper.SetConfigName("config")
-	// Set the type of the config file
-	viper.SetConfigType("yaml") // or json, toml, etc.
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(path) // Path for config file (e.g., ".")
 
-	// --- Environment Variable Handling ---
+	// --- Explicit Environment Variable Binding ---
+	// This tells Viper to specifically look for these ENV VARS
+	// and map them to these config keys. This often has higher precedence
+	// or works more reliably with Unmarshal when a config file is also present.
+	viper.BindEnv("jwt.secret", "JWT_SECRET")
+	viper.BindEnv("jwt.expiration", "JWT_EXPIRATION") // Assuming this key from earlier fix
+	viper.BindEnv("database.uri", "DATABASE_URI")
+	viper.BindEnv("database.name", "DATABASE_NAME")
+	viper.BindEnv("server.address", "SERVER_ADDRESS") // Or PORT if App Runner sets that
+	viper.BindEnv("s3.endpoint", "S3_ENDPOINT")
+	viper.BindEnv("s3.public_endpoint", "S3_PUBLIC_ENDPOINT")
+	viper.BindEnv("s3.region", "S3_REGION")
+	viper.BindEnv("s3.access_key_id", "S3_ACCESS_KEY_ID") // If using access keys for S3 directly from app
+	viper.BindEnv("s3.secret_access_key", "S3_SECRET_ACCESS_KEY") // If using access keys for S3
+	viper.BindEnv("s3.bucket_name", "S3_BUCKET_NAME")
+	viper.BindEnv("s3.use_ssl", "S3_USE_SSL")
+	// Add any other critical env vars here
+
+	// AutomaticEnv can still be used for other variables or as a fallback
 	viper.AutomaticEnv()
-	log.Println("Viper: AutomaticEnv and KeyReplacer set.")
-	log.Printf("Viper: Expecting ENV VAR for jwt.secret: %s", strings.ToUpper(strings.ReplaceAll("jwt.secret", ".", "_")))
-	log.Printf("Viper: Expecting ENV VAR for s3.bucket_name: %s", strings.ToUpper(strings.ReplaceAll("s3.bucket_name", ".", "_")))
-	log.Printf("Viper: Expecting ENV VAR for s3.endpoint: %s", strings.ToUpper(strings.ReplaceAll("s3.endpoint", ".", "_")))
-	// Use replacer for nested keys e.g., server.address -> SERVER_ADDRESS
-	// jwt.expiration -> JWT_EXPIRATION
-	viper.SetEnvKeyReplacer(strings.NewReplacer(`.`, `_`))
+	viper.SetEnvKeyReplacer(strings.NewReplacer(`.`, `_`)) // Still useful with AutomaticEnv
 
-	// --- Set default values (optional but recommended) ---
-	// Use duration string format for the default value as well
+	log.Println("Viper: BindEnv, AutomaticEnv and KeyReplacer set.")
+	// ... (your Viper debug logs for expected ENV VARS - these might be redundant if using BindEnv)
+
+	// Set defaults (these are lower precedence than ENV and config file)
 	viper.SetDefault("server.address", ":8080")
-	viper.SetDefault("database.uri", "mongodb://localhost:27017")
-	viper.SetDefault("database.name", "fitness_app_default")
-	viper.SetDefault("s3.use_ssl", true)     // Default to true for cloud providers
-	viper.SetDefault("s3.public_endpoint", "http://localhost:9000")
-	viper.SetDefault("jwt.expiration", "1h") // Default JWT expiry to 1 hour
+	viper.SetDefault("jwt.expiration", "1h")
+	// ... other defaults ...
 
-	// --- Read Config File ---
-	err = viper.ReadInConfig()
-	// If config file not found, continue (might rely solely on env vars),
-	// but log it or handle differently if the file is mandatory.
-	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-		// Config file not found; ignore error if desired
-		// log.Println("Config file not found, using defaults/env vars.")
-		err = nil // Reset err to nil if we want to proceed without a file
-	} else if err != nil {
-		// Some other error occurred reading the config file
-		return // Return the error
+	// Attempt to read the config file
+	// If found, its values are merged. ENV vars (especially with BindEnv) should override.
+	if errRead := viper.ReadInConfig(); errRead != nil {
+			if _, ok := errRead.(viper.ConfigFileNotFoundError); ok {
+					log.Println("Viper: Config file not found. Relying on ENV vars and defaults.")
+					// This is fine if config file is optional
+			} else {
+					log.Printf("Viper: Error reading config file: %v. Relying on ENV vars and defaults.", errRead)
+					// Decide if this is a fatal error or not.
+			}
+	} else {
+			log.Println("Viper: Successfully read config file.")
 	}
 
-	// --- Unmarshal Config ---
-	// Viper will now attempt to parse the duration string ("60m", "1h", etc.)
-	// directly into the time.Duration field (config.JWT.Expiration).
+	// Unmarshal the config
 	err = viper.Unmarshal(&config)
 	if err != nil {
-		// Return the unmarshalling error (this is where the "missing unit" error originates)
-		return
+			log.Fatalf("Viper: Unable to decode into struct, %v", err) // Make this fatal if unmarshal fails
 	}
-	log.Printf("Loaded config: JWT Secret is '%s'", config.JWT.Secret) // Log after unmarshal
+
+	log.Printf("Loaded config: JWT Secret length: %d", len(config.JWT.Secret)) // Check length instead of value for sensitive
 	log.Printf("Loaded config: S3 Bucket is '%s'", config.S3.BucketName)
 	log.Printf("Loaded config: S3 Endpoint is '%s'", config.S3.Endpoint)
-	// --- REMOVED ---
-	// NO manual conversion of duration is needed here anymore.
-	// The viper.Unmarshal step handles it directly because:
-	// 1. The YAML value is a duration string (e.g., "60m").
-	// 2. The Go struct field is time.Duration.
 
-	return config, nil // Return the populated config struct and nil error if successful
+	return
 }

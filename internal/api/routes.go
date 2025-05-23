@@ -27,14 +27,12 @@ func SetupRoutes(
 
 	authMiddleware := AuthMiddleware(jwtSecret) // Using the jwtSecret parameter
 
-	router.GET("/ping", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "pong"})
-	})
-
-	// router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
-
 	apiV1 := router.Group("/api/v1")
 	{
+		apiV1.GET("/ping", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"message": "pong from v1"})
+		})
+
 		authGroup := apiV1.Group("/auth")
 		{
 			authGroup.POST("/register", authHandler.Register)

@@ -1,6 +1,6 @@
 # --- Stage 1: Builder ---
 # Use an official Go image as the base. Specify the Go version.
-FROM golang:1.24.2-alpine AS builder
+FROM golang:1.24.3-alpine AS builder
 
 # Set the working directory inside the container
 WORKDIR /app

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,15 @@ import (
 // @description Type "Bearer" followed by a space and JWT token.
 func main() {
 	log.Println("Starting Fitness App Server...")
+	log.Println("---- DUMPING ALL ENVIRONMENT VARIABLES ----")
+	for _, e := range os.Environ() {
+			pair := strings.SplitN(e, "=", 2)
+			// Only print relevant ones or be careful with printing all in production logs if sensitive
+			if strings.HasPrefix(pair[0], "JWT_") || strings.HasPrefix(pair[0], "S3_") || strings.HasPrefix(pair[0], "DATABASE_") || strings.HasPrefix(pair[0], "SERVER_") {
+					log.Printf("ENV: %s = %s", pair[0], pair[1])
+			}
+	}
+	log.Println("---- FINISHED DUMPING ENV VARS ----")
 
 	// --- Configuration ---
 	cfg, err := config.LoadConfig(".")

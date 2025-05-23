@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"strings"
 	"time" // Ensure time package is imported
 
@@ -55,6 +56,10 @@ func LoadConfig(path string) (config Config, err error) {
 
 	// --- Environment Variable Handling ---
 	viper.AutomaticEnv()
+	log.Println("Viper: AutomaticEnv and KeyReplacer set.")
+	log.Printf("Viper: Expecting ENV VAR for jwt.secret: %s", strings.ToUpper(strings.ReplaceAll("jwt.secret", ".", "_")))
+	log.Printf("Viper: Expecting ENV VAR for s3.bucket_name: %s", strings.ToUpper(strings.ReplaceAll("s3.bucket_name", ".", "_")))
+	log.Printf("Viper: Expecting ENV VAR for s3.endpoint: %s", strings.ToUpper(strings.ReplaceAll("s3.endpoint", ".", "_")))
 	// Use replacer for nested keys e.g., server.address -> SERVER_ADDRESS
 	// jwt.expiration -> JWT_EXPIRATION
 	viper.SetEnvKeyReplacer(strings.NewReplacer(`.`, `_`))
@@ -89,7 +94,9 @@ func LoadConfig(path string) (config Config, err error) {
 		// Return the unmarshalling error (this is where the "missing unit" error originates)
 		return
 	}
-
+	log.Printf("Loaded config: JWT Secret is '%s'", config.JWT.Secret) // Log after unmarshal
+	log.Printf("Loaded config: S3 Bucket is '%s'", config.S3.BucketName)
+	log.Printf("Loaded config: S3 Endpoint is '%s'", config.S3.Endpoint)
 	// --- REMOVED ---
 	// NO manual conversion of duration is needed here anymore.
 	// The viper.Unmarshal step handles it directly because:

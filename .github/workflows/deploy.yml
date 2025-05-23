@@ -9,7 +9,7 @@ on:
 
 env:
   AWS_REGION: eu-west-1 # Change to your AWS region
-  ECR_REPOSITORY: 938835673448.dkr.ecr.eu-west-1.amazonaws.com/fitness-app-backend-dev
+  ECR_REPOSITORY: fitness-app-backend-dev
 
 jobs:
   build-and-push-image:

@@ -1,0 +1,87 @@
+name: Build and Push to ECR
+
+on:
+  push:
+    branches:
+      - main # Or your primary deployment branch, e.g., master, production
+  # Optional: Allow manual trigger
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1 # Change to your AWS region
+  ECR_REPOSITORY: 938835673448.dkr.ecr.eu-west-1.amazonaws.com/fitness-app-backend-dev
+
+jobs:
+  build-and-push-image:
+    name: Build and Push Docker image to ECR
+    runs-on: ubuntu-latest # Use a Linux runner
+
+    permissions:
+      contents: read      # Needed to check out the repository
+      id-token: write     # Needed for AWS OIDC authentication (recommended)
+      packages: write     # If pushing to GitHub Packages registry as well (optional)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::938835673448:role/github-actions-role # Replace with your IAM role ARN
+          aws-region: ${{ env.AWS_REGION }}
+          # Fallback to Access Keys if OIDC role is not set up (less secure):
+          # aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          # aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Optional
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short # Git SHA short (e.g., a1b2c3d)
+            type=raw,value=latest,enable={{is_default_branch}} # 'latest' tag for default branch
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: . # Build context is the root of the repository
+          file: ./Dockerfile # Path to your Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha # Enable GitHub Actions cache for Docker layers
+          cache-to: type=gha,mode=max
+
+      - name: Output Image Details
+        run: |
+          echo "Image pushed to ECR with tags: ${{ steps.meta.outputs.tags }}"
+          echo "Image digest: ${{ steps.build.outputs.digest }}" # 'build' is the default id for build-push-action
+
+      # --- Optional: Trigger Terraform Cloud Run ---
+      # This step depends on how you want to trigger TFC.
+      # Option 1: TFC workspace configured to auto-apply on VCS changes (if your infra repo changes based on image tag)
+      # Option 2: TFC workspace watches ECR for new image tags (requires ECR event source in TFC)
+      # Option 3: Use TFC API to trigger a run (more complex setup)
+      #
+      # Example using a simple curl to a TFC webhook if you have one for "Run Trigger"
+      # - name: Trigger Terraform Cloud Apply
+      #   if: github.ref == 'refs/heads/main' # Only for main branch
+      #   env:
+      #        TFC_RUN_TRIGGER_URL: ${{ secrets.TFC_RUN_TRIGGER_URL }} # Store this as a GitHub Secret
+      #   run: |
+      #     if [ -n "$TFC_RUN_TRIGGER_URL" ]; then
+      #       curl -X POST -d '{"message":"New image pushed from GitHub Actions: ${{ steps.meta.outputs.tags }}"}' "$TFC_RUN_TRIGGER_URL"
+      #       echo "Terraform Cloud run triggered."
+      #     else
+      #       echo "TFC_RUN_TRIGGER_URL not set. Skipping TFC trigger."
+      #     fi
